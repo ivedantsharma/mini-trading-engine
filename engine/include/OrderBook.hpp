@@ -1,10 +1,10 @@
 #pragma once
 
-#include "Order.hpp"
 #include <map>
 #include <deque>
-#include <unordered_map>
 #include <vector>
+#include <cstdint>
+#include "Order.hpp"
 
 struct Trade {
     uint64_t tradeId;
@@ -15,33 +15,40 @@ struct Trade {
     uint64_t timestamp;
 };
 
+// Comparator: highest price first (for bids)
+struct DescendingPrice {
+    bool operator()(double a, double b) const {
+        return a > b;       // higher prices come first
+    }
+};
+
 class OrderBook {
 public:
     OrderBook();
 
-    std::vector<Trade> addOrder(const Order& order);  
-    void cancelOrder(uint64_t orderId);
-    void printTopLevels() const;
+    // bids = highest price first
+    std::map<double, std::deque<Order>, DescendingPrice> bids;
 
-private:
-    // BUY side → highest price first
-    std::map<double, std::deque<Order>, std::greater<double>> bids;
+    // asks = lowest price first
+    std::map<double, std::deque<Order>> asks;
 
-    // SELL side → lowest price first
-    std::map<double, std::deque<Order>, std::less<double>> asks;
-
-    std::unordered_map<uint64_t, double> orderIdToPrice;
+    // Store mapping for cancellation
+    std::map<uint64_t, double> orderIdToPrice;
 
     uint64_t nextTradeId = 1;
 
-    // Limit order matchers
+    std::vector<Trade> addOrder(const Order& order);
+
+public:
     std::vector<Trade> matchLimitBuy(Order order);
     std::vector<Trade> matchLimitSell(Order order);
 
-    // Market order matchers
     std::vector<Trade> matchMarketBuy(Order order);
     std::vector<Trade> matchMarketSell(Order order);
 
-    // Helpers
     void insertLimitOrder(const Order& order);
+    void cancelOrder(uint64_t orderId);
+
+public:
+    void printTopLevels() const;
 };

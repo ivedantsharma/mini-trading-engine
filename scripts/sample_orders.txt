@@ -1,0 +1,57 @@
+# 0 - Simple limit match (basic)
+NEW,1,AAPL,BUY,LIMIT,100.5,10
+NEW,2,AAPL,SELL,LIMIT,100.4,5
+SNAP
+
+# 1 - Partial fill and remaining resting order
+NEW,3,AAPL,SELL,LIMIT,100.5,8    # should match 5 -> buy(1) left with 5, sell(3) left with 3
+SNAP
+
+# 2 - Same price FIFO (price level test)
+NEW,4,AAPL,BUY,LIMIT,100.6,4
+NEW,5,AAPL,BUY,LIMIT,100.6,6    # both in same price level; 4 then 6
+NEW,6,AAPL,SELL,LIMIT,100.6,7   # should fill order 4 (4), then 3 of order5 (remaining 3)
+SNAP
+
+# 3 - Market order consuming multiple price levels
+NEW,7,MSFT,BUY,LIMIT,200.0,5
+NEW,8,MSFT,SELL,LIMIT,199.5,2
+NEW,9,MSFT,SELL,LIMIT,199.0,4
+NEW,10,MSFT,BUY,MARKET,0,6      # market buy should consume 199.5 (2) and 199.0 (4) -> total 6
+SNAP
+
+# 4 - Market order when book empty (should not crash; no trades)
+NEW,11,TSLA,BUY,MARKET,0,5
+SNAP
+
+# 5 - Cancel resting order
+NEW,12,NVDA,BUY,LIMIT,500.0,10
+CANCEL,12
+SNAP
+
+# 6 - Cancel after partial fill
+NEW,13,GOOG,BUY,LIMIT,1500.0,10
+NEW,14,GOOG,SELL,LIMIT,1500.0,4   # partial fill (4)
+CANCEL,13                         # cancel remaining 6
+SNAP
+
+# 7 - Multiple symbols isolation (orderbooks independent)
+NEW,15,AAPL,BUY,LIMIT,101.0,2
+NEW,16,GOOG,SELL,LIMIT,1200.0,1
+NEW,17,AAPL,SELL,LIMIT,101.0,1    # should match only AAPL
+SNAP
+
+# 8 - Large depth and walking book (stress)
+NEW,20,XYZ,BUY,LIMIT,10.0,50
+NEW,21,XYZ,BUY,LIMIT,9.5,50
+NEW,22,XYZ,BUY,LIMIT,9.0,50
+NEW,23,XYZ,SELL,LIMIT,9.0,120     # should walk multiple levels and leave some resting
+SNAP
+
+# 9 - Edge: identical orderIds (should be avoided; observe behavior)
+NEW,24,ABC,BUY,LIMIT,5.0,10
+NEW,24,ABC,SELL,LIMIT,4.5,5
+SNAP
+
+# 10 - Final cleanup sanity
+SNAP

@@ -20,15 +20,17 @@ std::vector<Trade> OrderBook::addOrder(const Order& order) {
 }
 
 std::vector<Trade> OrderBook::matchMarketBuy(Order order) {
-    // market buy → match like limit buy with infinite price
-    order.price = std::numeric_limits<double>::infinity();
-    return matchLimitBuy(order);
+    order.price = std::numeric_limits<double>::infinity(); // can match all asks
+    auto trades = matchLimitBuy(order);
+    // Market orders NEVER rest
+    return trades;
 }
 
 std::vector<Trade> OrderBook::matchMarketSell(Order order) {
-    // market sell → match like limit sell with price 0
-    order.price = 0.0;
-    return matchLimitSell(order);
+    order.price = 0.0; // can match all bids
+    auto trades = matchLimitSell(order);
+    // Market orders NEVER rest
+    return trades;
 }
 
 void OrderBook::insertLimitOrder(const Order& order) {
@@ -38,7 +40,6 @@ void OrderBook::insertLimitOrder(const Order& order) {
         asks[order.price].push_back(order);
     }
 
-    // Store lookup for cancellation later
     orderIdToPrice[order.orderId] = order.price;
 
     std::cout << "Added LIMIT order: "
@@ -55,20 +56,16 @@ void OrderBook::cancelOrder(uint64_t orderId) {
 
     double price = it_lookup->second;
 
-    // Determine which side it's on by trying both books.
     auto eraseFrom = [&](auto& book) {
         auto it = book.find(price);
         if (it == book.end()) return false;
 
-        auto& dequeAtPrice = it->second;
+        auto& dq = it->second;
 
-        for (auto iter = dequeAtPrice.begin(); iter != dequeAtPrice.end(); ++iter) {
+        for (auto iter = dq.begin(); iter != dq.end(); ++iter) {
             if (iter->orderId == orderId) {
-                dequeAtPrice.erase(iter);
-                // If price level empty, erase it
-                if (dequeAtPrice.empty()) {
-                    book.erase(it);
-                }
+                dq.erase(iter);
+                if (dq.empty()) book.erase(it);
                 return true;
             }
         }
@@ -81,8 +78,7 @@ void OrderBook::cancelOrder(uint64_t orderId) {
         orderIdToPrice.erase(it_lookup);
         std::cout << "Cancelled order " << orderId << "\n";
     } else {
-        // Stale mapping or already filled
-        std::cout << "Order not found in book (maybe already filled) - cleaning lookup\n";
+        std::cout << "Order not found in book (maybe filled) – cleaning lookup\n";
         orderIdToPrice.erase(it_lookup);
     }
 }
@@ -92,7 +88,7 @@ void OrderBook::printTopLevels() const {
 
     if (!bids.empty()) {
         auto bestBid = bids.begin();
-        std::cout << "Best Bid: " << bestBid->first 
+        std::cout << "Best Bid: " << bestBid->first
                   << " (" << bestBid->second.size() << " orders)\n";
     } else {
         std::cout << "Best Bid: None\n";
@@ -100,7 +96,7 @@ void OrderBook::printTopLevels() const {
 
     if (!asks.empty()) {
         auto bestAsk = asks.begin();
-        std::cout << "Best Ask: " << bestAsk->first 
+        std::cout << "Best Ask: " << bestAsk->first
                   << " (" << bestAsk->second.size() << " orders)\n";
     } else {
         std::cout << "Best Ask: None\n";
@@ -110,53 +106,46 @@ void OrderBook::printTopLevels() const {
 std::vector<Trade> OrderBook::matchLimitBuy(Order order) {
     std::vector<Trade> trades;
 
-    // While we have sell orders and incoming order has quantity
     while (!asks.empty() && order.quantity > 0) {
         auto bestAskIt = asks.begin();
         double bestAskPrice = bestAskIt->first;
 
-        // If buy price < best ask → can't match
         if (order.price < bestAskPrice)
             break;
 
-        auto &sellQueue = bestAskIt->second;
-
-        // Reference to the front (resting) sell order
-        Order &sellOrder = sellQueue.front();
+        auto& sellQueue = bestAskIt->second;
+        Order& sellOrder = sellQueue.front();
 
         uint32_t tradedQty = std::min(order.quantity, sellOrder.quantity);
 
-        // Create trade - trade price is resting order's price (best ask)
+        std::cout << "[DEBUG] MATCH BUY: bestAskPrice=" << bestAskPrice
+                  << " order.price=" << order.price
+                  << " tradedQty=" << tradedQty << std::endl;
+
         trades.push_back(Trade{
             nextTradeId++,
-            order.orderId,          // buy ID
-            sellOrder.orderId,      // sell ID
-            bestAskPrice,           // trade happens at ask price
+            order.orderId,
+            sellOrder.orderId,
+            bestAskPrice,
             tradedQty,
-            order.timestamp         // simple timestamp
+            order.timestamp
         });
 
-        // Decrease quantities
         order.quantity -= tradedQty;
         sellOrder.quantity -= tradedQty;
 
-        // If sell order fully filled, remove it AND its lookup entry
         if (sellOrder.quantity == 0) {
-            uint64_t filledOrderId = sellOrder.orderId;
-            // Erase mapping for this filled resting order
-            auto it = orderIdToPrice.find(filledOrderId);
+            auto it = orderIdToPrice.find(sellOrder.orderId);
             if (it != orderIdToPrice.end()) orderIdToPrice.erase(it);
-
             sellQueue.pop_front();
         }
 
-        // If price level empty, erase it
         if (sellQueue.empty())
             asks.erase(bestAskIt);
     }
 
-    // If remaining qty → insert into bids
-    if (order.quantity > 0) {
+    // FIX: leftover qty must NOT be inserted if MARKET order
+    if (order.quantity > 0 && order.type == OrderType::LIMIT) {
         insertLimitOrder(order);
     }
 
@@ -170,22 +159,22 @@ std::vector<Trade> OrderBook::matchLimitSell(Order order) {
         auto bestBidIt = bids.begin();
         double bestBidPrice = bestBidIt->first;
 
-        // If sell price > best bid → no match
         if (order.price > bestBidPrice)
             break;
 
-        auto &buyQueue = bestBidIt->second;
-
-        // Resting buy order
-        Order &buyOrder = buyQueue.front();
+        auto& buyQueue = bestBidIt->second;
+        Order& buyOrder = buyQueue.front();
 
         uint32_t tradedQty = std::min(order.quantity, buyOrder.quantity);
 
-        // Create trade - trade price is resting order's price (best bid)
+        std::cout << "[DEBUG] MATCH SELL: bestBidPrice=" << bestBidPrice
+                  << " order.price=" << order.price
+                  << " tradedQty=" << tradedQty << std::endl;
+
         trades.push_back(Trade{
             nextTradeId++,
-            buyOrder.orderId,      // buy ID
-            order.orderId,         // sell ID
+            buyOrder.orderId,
+            order.orderId,
             bestBidPrice,
             tradedQty,
             order.timestamp
@@ -194,12 +183,9 @@ std::vector<Trade> OrderBook::matchLimitSell(Order order) {
         order.quantity -= tradedQty;
         buyOrder.quantity -= tradedQty;
 
-        // If buy order fully filled, remove it AND its lookup entry
         if (buyOrder.quantity == 0) {
-            uint64_t filledOrderId = buyOrder.orderId;
-            auto it = orderIdToPrice.find(filledOrderId);
+            auto it = orderIdToPrice.find(buyOrder.orderId);
             if (it != orderIdToPrice.end()) orderIdToPrice.erase(it);
-
             buyQueue.pop_front();
         }
 
@@ -207,7 +193,8 @@ std::vector<Trade> OrderBook::matchLimitSell(Order order) {
             bids.erase(bestBidIt);
     }
 
-    if (order.quantity > 0) {
+    // FIX here also
+    if (order.quantity > 0 && order.type == OrderType::LIMIT) {
         insertLimitOrder(order);
     }
 
