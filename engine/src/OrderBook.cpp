@@ -1,6 +1,7 @@
 #include "OrderBook.hpp"
 #include <iostream>
 #include <limits>
+#include <algorithm>
 
 OrderBook::OrderBook() {}
 
@@ -46,37 +47,44 @@ void OrderBook::insertLimitOrder(const Order& order) {
 }
 
 void OrderBook::cancelOrder(uint64_t orderId) {
-    if (orderIdToPrice.find(orderId) == orderIdToPrice.end()) {
+    auto it_lookup = orderIdToPrice.find(orderId);
+    if (it_lookup == orderIdToPrice.end()) {
         std::cout << "Order not found\n";
         return;
     }
 
-    double price = orderIdToPrice[orderId];
+    double price = it_lookup->second;
 
-    // Determine which side it's on
+    // Determine which side it's on by trying both books.
     auto eraseFrom = [&](auto& book) {
         auto it = book.find(price);
-        if (it == book.end()) return;
+        if (it == book.end()) return false;
 
         auto& dequeAtPrice = it->second;
 
         for (auto iter = dequeAtPrice.begin(); iter != dequeAtPrice.end(); ++iter) {
             if (iter->orderId == orderId) {
                 dequeAtPrice.erase(iter);
-                break;
+                // If price level empty, erase it
+                if (dequeAtPrice.empty()) {
+                    book.erase(it);
+                }
+                return true;
             }
         }
-
-        // If price level empty, erase it
-        if (dequeAtPrice.empty()) {
-            book.erase(price);
-        }
+        return false;
     };
 
-    eraseFrom(bids);
-    eraseFrom(asks);
+    bool erased = eraseFrom(bids) || eraseFrom(asks);
 
-    orderIdToPrice.erase(orderId);
+    if (erased) {
+        orderIdToPrice.erase(it_lookup);
+        std::cout << "Cancelled order " << orderId << "\n";
+    } else {
+        // Stale mapping or already filled
+        std::cout << "Order not found in book (maybe already filled) - cleaning lookup\n";
+        orderIdToPrice.erase(it_lookup);
+    }
 }
 
 void OrderBook::printTopLevels() const {
@@ -113,11 +121,12 @@ std::vector<Trade> OrderBook::matchLimitBuy(Order order) {
 
         auto &sellQueue = bestAskIt->second;
 
+        // Reference to the front (resting) sell order
         Order &sellOrder = sellQueue.front();
 
         uint32_t tradedQty = std::min(order.quantity, sellOrder.quantity);
 
-        // Create trade
+        // Create trade - trade price is resting order's price (best ask)
         trades.push_back(Trade{
             nextTradeId++,
             order.orderId,          // buy ID
@@ -131,11 +140,17 @@ std::vector<Trade> OrderBook::matchLimitBuy(Order order) {
         order.quantity -= tradedQty;
         sellOrder.quantity -= tradedQty;
 
-        // Remove fully filled sell order
-        if (sellOrder.quantity == 0)
-            sellQueue.pop_front();
+        // If sell order fully filled, remove it AND its lookup entry
+        if (sellOrder.quantity == 0) {
+            uint64_t filledOrderId = sellOrder.orderId;
+            // Erase mapping for this filled resting order
+            auto it = orderIdToPrice.find(filledOrderId);
+            if (it != orderIdToPrice.end()) orderIdToPrice.erase(it);
 
-        // Remove empty price level
+            sellQueue.pop_front();
+        }
+
+        // If price level empty, erase it
         if (sellQueue.empty())
             asks.erase(bestAskIt);
     }
@@ -161,11 +176,12 @@ std::vector<Trade> OrderBook::matchLimitSell(Order order) {
 
         auto &buyQueue = bestBidIt->second;
 
+        // Resting buy order
         Order &buyOrder = buyQueue.front();
 
         uint32_t tradedQty = std::min(order.quantity, buyOrder.quantity);
 
-        // Create trade
+        // Create trade - trade price is resting order's price (best bid)
         trades.push_back(Trade{
             nextTradeId++,
             buyOrder.orderId,      // buy ID
@@ -178,8 +194,14 @@ std::vector<Trade> OrderBook::matchLimitSell(Order order) {
         order.quantity -= tradedQty;
         buyOrder.quantity -= tradedQty;
 
-        if (buyOrder.quantity == 0)
+        // If buy order fully filled, remove it AND its lookup entry
+        if (buyOrder.quantity == 0) {
+            uint64_t filledOrderId = buyOrder.orderId;
+            auto it = orderIdToPrice.find(filledOrderId);
+            if (it != orderIdToPrice.end()) orderIdToPrice.erase(it);
+
             buyQueue.pop_front();
+        }
 
         if (buyQueue.empty())
             bids.erase(bestBidIt);
