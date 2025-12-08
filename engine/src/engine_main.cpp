@@ -1,15 +1,17 @@
+// engine/src/engine-main.cpp
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
 #include <chrono>
-#include "OrderBook.hpp"
 #include <unistd.h>
+
+#include "OrderBookManager.hpp"
 
 // helper to get monotonic timestamp in nanoseconds
 static uint64_t now_nanos() {
     using namespace std::chrono;
-    return (uint64_t)duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
+    return (uint64_t)duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 static void printTradeJSON(const Trade& t) {
@@ -29,8 +31,10 @@ static void printUsage() {
               << "  NEW,<orderId>,<SYMBOL>,<BUY/SELL>,<LIMIT/MARKET>,<price or 0>,<qty>\n"
               << "    e.g. NEW,1,AAPL,BUY,LIMIT,100.5,10\n"
               << "    e.g. NEW,2,AAPL,SELL,MARKET,0,5\n"
-              << "  CANCEL,<orderId>\n"
-              << "  SNAP    -- prints top-level book\n"
+              << "  CANCEL,<SYMBOL>,<orderId>\n"
+              << "    e.g. CANCEL,AAPL,1\n"
+              << "  SNAP            -- prints top-level for all symbols\n"
+              << "  SNAP,<SYMBOL>   -- prints top-level for a single symbol\n"
               << "  QUIT\n";
 }
 
@@ -45,7 +49,7 @@ static inline std::string trim(const std::string& s) {
 }
 
 int main() {
-    OrderBook book;
+    OrderBookManager manager;
     std::string line;
 
     std::cout << "Mini Trading Engine CLI (type HELP for usage)\n";
@@ -74,9 +78,25 @@ int main() {
 
         if (line == "QUIT" || line == "EXIT") break;
         if (line == "HELP") { printUsage(); continue; }
-        if (line == "SNAP") { book.printTopLevels(); continue; }
 
-        // Parse CSV tokens
+        // SNAP handling: SNAP or SNAP,<SYMBOL>
+        if (line.rfind("SNAP", 0) == 0) { // starts with SNAP
+            // parse optional symbol
+            std::stringstream sss(line);
+            std::string cmd;
+            std::getline(sss, cmd, ','); // consume SNAP
+            std::string symbol;
+            if (std::getline(sss, symbol, ',')) {
+                symbol = trim(symbol);
+                if (!symbol.empty()) manager.printTopLevels(symbol);
+                else manager.printTopLevels();
+            } else {
+                manager.printTopLevels();
+            }
+            continue;
+        }
+
+        // split CSV tokens
         std::stringstream ss(line);
         std::string token;
         std::vector<std::string> parts;
@@ -152,29 +172,27 @@ int main() {
             o.quantity = qty;
             o.timestamp = now_nanos();
 
-            // Optional debug (uncomment to inspect parsed tokens)
-            // std::cout << "[DBG] Parsed NEW: id=" << o.orderId << " sym=" << o.symbol
-            //           << " side=" << sideStr << " type=" << typeStr << " price=" << o.price
-            //           << " qty=" << o.quantity << "\n";
-
-            auto trades = book.addOrder(o);
+            // Route to per-symbol orderbook manager
+            auto trades = manager.addOrder(symbol, o);
 
             for (const auto& t : trades)
                 printTradeJSON(t);
 
         } else if (cmd == "CANCEL") {
-            if (parts.size() != 2) {
-                std::cerr << "CANCEL requires orderId. Type HELP.\n";
+            // Now requires symbol: CANCEL,<SYMBOL>,<orderId>
+            if (parts.size() != 3) {
+                std::cerr << "CANCEL requires: CANCEL,<SYMBOL>,<orderId>\n";
                 continue;
             }
+            std::string symbol = parts[1];
             uint64_t orderId = 0;
             try {
-                orderId = std::stoull(parts[1]);
+                orderId = std::stoull(parts[2]);
             } catch (...) {
-                std::cerr << "Invalid orderId: " << parts[1] << "\n";
+                std::cerr << "Invalid orderId: " << parts[2] << "\n";
                 continue;
             }
-            book.cancelOrder(orderId);
+            manager.cancelOrder(symbol, orderId);
 
         } else {
             std::cerr << "Unknown command: " << cmd << ". Type HELP for usage.\n";
