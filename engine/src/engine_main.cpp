@@ -1,4 +1,3 @@
-// engine/src/engine-main.cpp
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -7,16 +6,16 @@
 #include <unistd.h>
 
 #include "OrderBookManager.hpp"
-#include <MarketDataServer.hpp>
+#include "MarketDataServer.hpp"
 
 // helper to get monotonic timestamp in nanoseconds
 static uint64_t now_nanos() {
     using namespace std::chrono;
-    return (uint64_t)duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 static void printTradeJSON(const Trade& t) {
-    // simple JSON-line for readability
     std::cout << "{"
               << "\"tradeId\":" << t.tradeId << ","
               << "\"buyOrderId\":" << t.buyOrderId << ","
@@ -30,12 +29,8 @@ static void printTradeJSON(const Trade& t) {
 static void printUsage() {
     std::cout << "Commands:\n"
               << "  NEW,<orderId>,<SYMBOL>,<BUY/SELL>,<LIMIT/MARKET>,<price or 0>,<qty>\n"
-              << "    e.g. NEW,1,AAPL,BUY,LIMIT,100.5,10\n"
-              << "    e.g. NEW,2,AAPL,SELL,MARKET,0,5\n"
-              << "  CANCEL,<SYMBOL>,<orderId>\n"
-              << "    e.g. CANCEL,AAPL,1\n"
-              << "  SNAP            -- prints top-level for all symbols\n"
-              << "  SNAP,<SYMBOL>   -- prints top-level for a single symbol\n"
+              << "  CANCEL,<orderId>\n"
+              << "  SNAP or SNAP,<SYMBOL>\n"
               << "  QUIT\n";
 }
 
@@ -50,159 +45,136 @@ static inline std::string trim(const std::string& s) {
 }
 
 int main() {
+    // Start WS market-data server
     unsigned short md_port = 9002;
-    MarketDataServer::start(md_port);
+    MarketDataServerAPI::start(md_port);
 
-    OrderBookManager manager;
+    OrderBookManager mgr;
     std::string line;
 
     std::cout << "Mini Trading Engine CLI (type HELP for usage)\n";
 
-    while (true) {
-        // Only show prompt in interactive terminal, NOT for redirected files
-        if (isatty(fileno(stdin))) {
-            std::cout << "> " << std::flush;
+    auto process_line = [&](const std::string &l_in) {
+        std::string l = l_in;
+        if (l.empty()) return;
+        // ignore comments
+        if (l[0] == '#') return;
+        auto pos = l.find('#');
+        if (pos != std::string::npos) l = l.substr(0, pos);
+        l = trim(l);
+        if (l.empty()) return;
+        if (l == "QUIT" || l == "EXIT") {
+            // indicate quit by throwing a signal via exception or return code
+            throw std::runtime_error("QUIT");
+        }
+        if (l == "HELP") { printUsage(); return; }
+        if (l == "SNAP") { mgr.printTopLevels(); return; }
+
+        // SNAP for specific symbol
+        if (l.rfind("SNAP,", 0) == 0) {
+            std::string symbol = trim(l.substr(5));
+            mgr.printTopLevels(symbol);
+            return;
         }
 
-        if (!std::getline(std::cin, line)) break;
-        if (line.empty()) continue;
-
-        // ignore full-line comments quickly
-        if (line[0] == '#') continue;
-
-        // remove inline comments
-        auto pos = line.find('#');
-        if (pos != std::string::npos) {
-            line = line.substr(0, pos);
-        }
-
-        // trim and skip empty lines after removing comments
-        line = trim(line);
-        if (line.empty()) continue;
-
-        if (line == "QUIT" || line == "EXIT") break;
-        if (line == "HELP") { printUsage(); continue; }
-
-        // SNAP handling: SNAP or SNAP,<SYMBOL>
-        if (line.rfind("SNAP", 0) == 0) { // starts with SNAP
-            // parse optional symbol
-            std::stringstream sss(line);
-            std::string cmd;
-            std::getline(sss, cmd, ','); // consume SNAP
-            std::string symbol;
-            if (std::getline(sss, symbol, ',')) {
-                symbol = trim(symbol);
-                if (!symbol.empty()) manager.printTopLevels(symbol);
-                else manager.printTopLevels();
-            } else {
-                manager.printTopLevels();
-            }
-            continue;
-        }
-
-        // split CSV tokens
-        std::stringstream ss(line);
+        // CSV parse
+        std::stringstream ss(l);
         std::string token;
         std::vector<std::string> parts;
-
         while (std::getline(ss, token, ',')) {
-            parts.push_back(trim(token));   // trim EVERY token
+            parts.push_back(trim(token));
         }
-
-        if (parts.empty()) continue;
+        if (parts.empty()) return;
 
         const std::string cmd = parts[0];
-
         if (cmd == "NEW") {
             if (parts.size() != 7) {
                 std::cerr << "NEW command requires 6 args. Type HELP.\n";
-                continue;
+                return;
             }
-
             uint64_t orderId = 0;
-            try {
-                orderId = std::stoull(parts[1]);
-            } catch (...) {
-                std::cerr << "Invalid orderId: " << parts[1] << "\n";
-                continue;
-            }
-
+            try { orderId = std::stoull(parts[1]); } catch(...) { std::cerr << "Invalid orderId\n"; return; }
             std::string symbol = parts[2];
             std::string sideStr = parts[3];
             std::string typeStr = parts[4];
-
             double price = 0.0;
             uint32_t qty = 0;
-            try {
-                price = std::stod(parts[5]);
-                qty = static_cast<uint32_t>(std::stoul(parts[6]));
-            } catch (...) {
-                std::cerr << "Invalid price/qty: " << parts[5] << " / " << parts[6] << "\n";
-                continue;
-            }
+            try { price = std::stod(parts[5]); qty = static_cast<uint32_t>(std::stoul(parts[6])); } catch(...) { std::cerr << "Invalid price/qty\n"; return; }
 
-            // Validate side AFTER trimming whitespace
             Side side;
             if (sideStr == "BUY") side = Side::BUY;
             else if (sideStr == "SELL") side = Side::SELL;
-            else {
-                std::cerr << "Invalid side: " << sideStr << "\n";
-                continue;
-            }
+            else { std::cerr << "Invalid side\n"; return; }
 
-            // Validate type AFTER trimming whitespace
             OrderType type;
             if (typeStr == "LIMIT") type = OrderType::LIMIT;
             else if (typeStr == "MARKET") type = OrderType::MARKET;
-            else {
-                std::cerr << "Invalid type: " << typeStr << "\n";
-                continue;
-            }
+            else { std::cerr << "Invalid type\n"; return; }
 
-            // Build order
             Order o;
             o.orderId = orderId;
             o.symbol = symbol;
             o.side = side;
             o.type = type;
-
-            // If MARKET, ensure price is normalized to 0.0 and rely on engine to not rest leftover
-            if (o.type == OrderType::MARKET) {
-                o.price = 0.0;
-            } else {
-                o.price = price;
-            }
-
+            o.price = (type == OrderType::MARKET ? 0.0 : price);
             o.quantity = qty;
             o.timestamp = now_nanos();
 
-            // Route to per-symbol orderbook manager
-            auto trades = manager.addOrder(symbol, o);
-
-            for (const auto& t : trades)
-                printTradeJSON(t);
+            auto trades = mgr.addOrder(symbol, o);
+            for (const auto &t : trades) printTradeJSON(t);
 
         } else if (cmd == "CANCEL") {
-            // Now requires symbol: CANCEL,<SYMBOL>,<orderId>
-            if (parts.size() != 3) {
-                std::cerr << "CANCEL requires: CANCEL,<SYMBOL>,<orderId>\n";
-                continue;
+            if (parts.size() != 3 && parts.size() != 2) {
+                std::cerr << "CANCEL requires orderId and optional symbol (CANCEL,<symbol>,<orderId> or CANCEL,<orderId>)\n";
+                return;
             }
-            std::string symbol = parts[1];
-            uint64_t orderId = 0;
-            try {
-                orderId = std::stoull(parts[2]);
-            } catch (...) {
-                std::cerr << "Invalid orderId: " << parts[2] << "\n";
-                continue;
+            if (parts.size() == 3) {
+                std::string symbol = parts[1];
+                uint64_t orderId = std::stoull(parts[2]);
+                mgr.cancelOrder(symbol, orderId);
+            } else {
+                uint64_t orderId = std::stoull(parts[1]);
+                // if symbol missing, attempt cancel across books by probing or just print message
+                // For simplicity, try all books
+                // (OrderBookManager::cancelOrder currently expects symbol; to cancel globally we'd add code)
+                // Here we just print message: user should pass symbol
+                std::cerr << "Please provide symbol for cancel: CANCEL,<symbol>,<orderId>\n";
             }
-            manager.cancelOrder(symbol, orderId);
-
         } else {
-            std::cerr << "Unknown command: " << cmd << ". Type HELP for usage.\n";
+            std::cerr << "Unknown command: " << cmd << "\n";
         }
+    };
+
+    try {
+        // main loop: process queued client messages first, then stdin input
+        while (true) {
+            // Handle client-sent messages (WS) — non-blocking: process all available
+            std::string client_msg;
+            while (MarketDataServerAPI::try_pop_client_message(client_msg)) {
+                try {
+                    process_line(client_msg);
+                } catch (const std::runtime_error &e) {
+                    if (std::string(e.what()) == "QUIT") throw;
+                } catch(...) {}
+            }
+
+            // Now read a line from stdin (blocking)
+            if (!isatty(fileno(stdin))) {
+                // if input redirected (script), just read as usual
+                if (!std::getline(std::cin, line)) break;
+                try { process_line(line); } catch(const std::runtime_error &e) { if (std::string(e.what()) == "QUIT") break; }
+            } else {
+                // interactive: show prompt and read; also we can do a short sleep to avoid busy-loop
+                std::cout << "> " << std::flush;
+                if (!std::getline(std::cin, line)) break;
+                try { process_line(line); } catch(const std::runtime_error &e) { if (std::string(e.what()) == "QUIT") break; }
+            }
+        }
+    } catch(...) {
+        // fallthrough to cleanup
     }
-    MarketDataServer::stop();
+
+    MarketDataServerAPI::stop();
     std::cout << "Exiting.\n";
     return 0;
 }
