@@ -6,22 +6,31 @@
 #include <cstdint>
 #include "OrderBook.hpp"
 
-// Manager that maintains per-symbol orderbooks and a global trade id
+// Small POD to store best bid/ask
+struct TopOfBook {
+    bool hasBid = false;
+    bool hasAsk = false;
+    double bestBid = 0.0;
+    double bestAsk = 0.0;
+};
+
 class OrderBookManager {
 public:
     OrderBookManager() : globalTradeId(1) {}
 
-    // Route order to per-symbol book and retag trade IDs to be globally unique
     std::vector<Trade> addOrder(const std::string& symbol, const Order& order);
-
-    // Cancel an order in a specific symbol
     void cancelOrder(const std::string& symbol, uint64_t orderId);
 
-    // Print top levels for all symbols or single symbol if provided
-    void printTopLevels() const;
-    void printTopLevels(const std::string& symbol) const;
+    void printTopLevels() const;                  // print all symbols
+    void printTopLevels(const std::string& symbol) const; // print specific symbol
 
 private:
     std::map<std::string, OrderBook> books;
+    std::map<std::string, TopOfBook> prevTop; // track previous top-of-book per symbol
     uint64_t globalTradeId;
+
+    // helpers
+    TopOfBook snapshotTop(const std::string& symbol) const;
+    void emitMarketDataTop(const std::string& symbol, const TopOfBook& top) const;
+    void emitTradeMD(const Trade& t, const std::string& symbol) const;
 };
