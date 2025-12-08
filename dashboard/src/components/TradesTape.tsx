@@ -6,6 +6,12 @@ type Props = {
 };
 
 export default function TradesTape({ trades }: Props) {
+  const [fallbackTs, setFallbackTs] = React.useState(0);
+
+  React.useEffect(() => {
+    setFallbackTs(Date.now() * 1e6);
+  }, []);
+
   return (
     <div className="bg-gray-900 rounded p-3 border border-gray-800 h-64 overflow-auto">
       <div className="text-sm text-gray-300 mb-2">Trades</div>
@@ -27,7 +33,7 @@ export default function TradesTape({ trades }: Props) {
                 <span className="text-gray-300">{t.quantity}</span>
               </div>
               <div className="text-xs text-gray-400">
-                {new Date((t.ts || Date.now()) / 1e6).toLocaleTimeString()}
+                {new Date((t.ts ?? fallbackTs) / 1e6).toLocaleTimeString()}
               </div>
             </div>
           ))}
