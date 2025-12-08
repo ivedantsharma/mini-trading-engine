@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "OrderBookManager.hpp"
+#include <MarketDataServer.hpp>
 
 // helper to get monotonic timestamp in nanoseconds
 static uint64_t now_nanos() {
@@ -49,6 +50,9 @@ static inline std::string trim(const std::string& s) {
 }
 
 int main() {
+    unsigned short md_port = 9002;
+    MarketDataServer::start(md_port);
+
     OrderBookManager manager;
     std::string line;
 
@@ -198,7 +202,7 @@ int main() {
             std::cerr << "Unknown command: " << cmd << ". Type HELP for usage.\n";
         }
     }
-
+    MarketDataServer::stop();
     std::cout << "Exiting.\n";
     return 0;
 }
