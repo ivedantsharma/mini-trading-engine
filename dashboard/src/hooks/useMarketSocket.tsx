@@ -1,4 +1,3 @@
-// src/hooks/useMarketSocket.tsx
 import { useEffect, useRef, useState } from "react";
 
 export type TopMsg = {
@@ -67,7 +66,8 @@ export function useMarketSocket(url = "ws://localhost:9002") {
       }
     };
     return () => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) wsRef.current.close();
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN)
+        wsRef.current.close();
       wsRef.current = null;
     };
   }, [url]);
