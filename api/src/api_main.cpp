@@ -45,6 +45,23 @@ void broadcastTop(const std::string& symbol) {
     double bestBid = book.bids.empty() ? 0.0 : book.bids.begin()->first;
     double bestAsk = book.asks.empty() ? 0.0 : book.asks.begin()->first;
 
+    // Add depth snapshot (top 10)
+    auto bidLevels = book.getDepth(true, 10);
+    auto askLevels = book.getDepth(false, 10);
+
+    json bids_json = json::array();
+    json asks_json = json::array();
+
+    for (auto &lvl : bidLevels) {
+        bids_json.push_back({ {"price", lvl.price}, {"qty", lvl.size} });
+    }
+    for (auto &lvl : askLevels) {
+        asks_json.push_back({ {"price", lvl.price}, {"qty", lvl.size} });
+    }
+
+    j["bids"] = bids_json;
+    j["asks"] = asks_json;
+
     json j = {
         {"type", "top"},
         {"symbol", symbol},

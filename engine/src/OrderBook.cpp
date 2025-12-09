@@ -200,3 +200,27 @@ std::vector<Trade> OrderBook::matchLimitSell(Order order) {
 
     return trades;
 }
+
+std::vector<DepthLevel> OrderBook::getDepth(bool isBid, int levels) const {
+    std::vector<DepthLevel> out;
+    out.reserve(levels);
+
+    if (isBid) {
+        for (auto it = bids.begin(); it != bids.end() && levels > 0; ++it) {
+            uint32_t sum = 0;
+            for (auto &o : it->second) sum += o.quantity;
+            out.push_back({it->first, sum});
+            levels--;
+        }
+    } else {
+        for (auto it = asks.begin(); it != asks.end() && levels > 0; ++it) {
+            uint32_t sum = 0;
+            for (auto &o : it->second) sum += o.quantity;
+            out.push_back({it->first, sum});
+            levels--;
+        }
+    }
+
+    return out;
+}
+

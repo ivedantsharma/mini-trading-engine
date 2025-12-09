@@ -15,6 +15,11 @@ struct Trade {
     uint64_t timestamp;
 };
 
+struct DepthLevel {
+    double price;
+    uint32_t size;
+};
+
 // Comparator: highest price first (for bids)
 struct DescendingPrice {
     bool operator()(double a, double b) const {
@@ -38,6 +43,10 @@ public:
     uint64_t nextTradeId = 1;
 
     std::vector<Trade> addOrder(const Order& order);
+
+    // Return top `levels` depth as a vector of DepthLevel. If `isBid` is true,
+    // returns bid-side levels (highest-first), otherwise ask-side (lowest-first).
+    std::vector<DepthLevel> getDepth(bool isBid, int levels) const;
 
 public:
     std::vector<Trade> matchLimitBuy(Order order);

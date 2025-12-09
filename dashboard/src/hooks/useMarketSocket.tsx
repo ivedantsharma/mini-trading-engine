@@ -5,6 +5,8 @@ export type TopMsg = {
   symbol: string;
   bestBid: number | null;
   bestAsk: number | null;
+  bids?: { price: number; qty: number }[];
+  asks?: { price: number; qty: number }[];
   ts?: number;
 };
 
