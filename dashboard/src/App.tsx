@@ -1,116 +1,94 @@
-import React, { useMemo, useState } from "react";
-import { useMarketSocket } from "./hooks/useMarketSocket";
-import TickerSelect from "./components/TickerSelect";
+import { useState } from "react";
 import TopOfBook from "./components/TopOfBook";
 import OrderBookDepth from "./components/OrderBookDepth";
-import TradesTape from "./components/TradesTape";
 import PriceSpark from "./components/PriceSpark";
+import TradesTape from "./components/TradesTape";
+import OrderEntry from "./components/OrderEntry";
 
-function App() {
-  const { connected, messages, latestForSymbol } = useMarketSocket();
-  // derive symbols from messages
-  const symbols = useMemo(() => {
-    const s = new Set<string>();
-    for (const m of messages) s.add(m.symbol);
-    return Array.from(s).sort();
-  }, [messages]);
+import { useMarketSocket } from "./hooks/useMarketSocket";
 
-  const initialSymbol = symbols[0] ?? "AAPL";
-  const [symbol, setSymbol] = useState(initialSymbol);
+export default function App() {
+  const [symbol, setSymbol] = useState("AAPL");
 
-  // keep symbol in sync when new ones appear
-  React.useEffect(() => {
-    if (!symbols.includes(symbol) && symbols.length) setSymbol(symbols[0]);
-  }, [symbols]);
+  // Hook now provides sendRaw()
+  const { connected, latestForSymbol, sendRaw } = useMarketSocket();
 
   const { top, trades } = latestForSymbol(symbol);
 
-  // simplistic depth placeholders: create synthetic depth if we only have top
-  // add near top of App (inside the component)
-  const [bids, setBids] = React.useState<Array<{ price: number; qty: number }>>(
-    []
-  );
-  const [asks, setAsks] = React.useState<Array<{ price: number; qty: number }>>(
-    []
-  );
-
-  React.useEffect(() => {
-    // Whenever top changes, regenerate synthetic depth OFF the render path
-    if (!top) {
-      setBids([]);
-      setAsks([]);
-      return;
-    }
-
-    // helper to make a small random qty but keep it stable within this effect run
-    const makeQty = () => Math.floor(Math.random() * 50) + 1;
-
-    const newBids = top.bestBid
-      ? Array.from({ length: 5 }, (_, i) => ({
-          price: parseFloat((top.bestBid! - i * 0.1).toFixed(2)),
-          qty: makeQty(),
-        }))
+  // Depth for UI (we no longer use Math.random inside render)
+  const bids =
+    top?.bestBid != null
+      ? [
+          { price: top.bestBid, qty: 12 },
+          { price: top.bestBid - 0.1, qty: 9 },
+          { price: top.bestBid - 0.2, qty: 4 },
+        ]
       : [];
 
-    const newAsks = top.bestAsk
-      ? Array.from({ length: 5 }, (_, i) => ({
-          price: parseFloat((top.bestAsk! + i * 0.1).toFixed(2)),
-          qty: makeQty(),
-        }))
+  const asks =
+    top?.bestAsk != null
+      ? [
+          { price: top.bestAsk, qty: 11 },
+          { price: top.bestAsk + 0.1, qty: 8 },
+          { price: top.bestAsk + 0.2, qty: 5 },
+        ]
       : [];
-
-    setBids(newBids);
-    setAsks(newAsks);
-
-    // dependency ensures this effect only runs when top changes
-  }, [top?.bestBid, top?.bestAsk]);
 
   return (
-    <div className="min-h-screen bg-[#0b0f14] text-white p-4">
-      <div className="max-w-7xl mx-auto">
-        <header className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-4">
-            <div className="text-xl font-semibold">
-              Mini Trading Engine — Dashboard
-            </div>
-            <div className="text-sm text-gray-400">Live</div>
-            <div
-              className={`px-2 py-1 rounded text-xs ${
-                connected ? "bg-green-700" : "bg-red-700"
-              }`}
-            >
-              {connected ? "WS Connected" : "Disconnected"}
-            </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <TickerSelect
-              symbols={symbols.length ? symbols : ["AAPL"]}
+    <div className="min-h-screen bg-[#0b0f19] text-white p-6">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-xl font-semibold">
+          Mini Trading Engine — Dashboard{" "}
+          <span className="text-sm text-green-400 ml-2">Live</span>
+        </h1>
+
+        <div className="flex items-center gap-4">
+          <div className="text-gray-300 text-sm">
+            <span className="mr-2">Symbol</span>
+            <input
               value={symbol}
-              onChange={setSymbol}
+              onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+              className="bg-gray-800 px-2 py-1 rounded text-white w-20"
             />
           </div>
-        </header>
 
-        <main className="grid grid-cols-12 gap-4">
-          <div className="col-span-6">
-            <TopOfBook
-              symbol={symbol}
-              bestBid={top?.bestBid ?? null}
-              bestAsk={top?.bestAsk ?? null}
-            />
-            <div className="mt-4 grid grid-cols-2 gap-4">
-              <OrderBookDepth bids={bids} asks={asks} />
-              <PriceSpark trades={trades} />
-            </div>
-          </div>
+          <span
+            className={
+              "px-3 py-1 rounded text-sm " +
+              (connected ? "bg-green-600" : "bg-red-600")
+            }
+          >
+            {connected ? "Connected" : "Disconnected"}
+          </span>
+        </div>
+      </div>
 
-          <div className="col-span-6">
-            <TradesTape trades={trades} />
+      {/* 2-column layout */}
+      <div className="grid grid-cols-[400px_1fr] gap-6">
+        {/* LEFT SIDE */}
+        <div className="space-y-6">
+          {/* Top Of Book */}
+          <TopOfBook
+            symbol={symbol}
+            bestBid={top?.bestBid ?? null}
+            bestAsk={top?.bestAsk ?? null}
+          />
+
+          {/* Depth + Sparkline + Order Entry */}
+          <div className="space-y-6">
+            <OrderBookDepth bids={bids} asks={asks} />
+            <PriceSpark trades={trades} />
+
+            {/* Order Entry Form */}
+            <OrderEntry currentSymbol={symbol} sendRaw={sendRaw} />
           </div>
-        </main>
+        </div>
+
+        {/* RIGHT SIDE — Trades */}
+        <div>
+          <TradesTape trades={trades} />
+        </div>
       </div>
     </div>
   );
 }
-
-export default App;

@@ -137,7 +137,7 @@ void OrderBookManager::emitMarketDataTop(const std::string& symbol, const TopOfB
 
     ss << ",\"timestamp\":" << now_nanos();
     ss << "}\n";
-    MarketDataServer::broadcast(ss.str());
+    MarketDataServerAPI::broadcast(ss.str());
 }
 
 void OrderBookManager::emitTradeMD(const Trade& t, const std::string& symbol) const {
@@ -153,5 +153,5 @@ void OrderBookManager::emitTradeMD(const Trade& t, const std::string& symbol) co
        << "\"sellOrderId\":" << t.sellOrderId << ","
        << "\"timestamp\":" << t.timestamp
        << "}\n";
-    MarketDataServer::broadcast(ss.str());
+    MarketDataServerAPI::broadcast(ss.str());
 }
