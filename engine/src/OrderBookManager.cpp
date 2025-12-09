@@ -3,6 +3,10 @@
 #include <iostream>
 #include <iomanip>
 #include <chrono>
+#include "DBLogger.hpp"
+
+
+static DBLogger DB;
 
 // helper timestamp (ns)
 static uint64_t now_nanos() {
@@ -11,6 +15,9 @@ static uint64_t now_nanos() {
 }
 
 std::vector<Trade> OrderBookManager::addOrder(const std::string& symbol, const Order& order) {
+    // Log the incoming order
+    DB.logOrder(order);
+    
     // Ensure book exists
     auto &book = books[symbol]; // default-construct if missing
 

@@ -4,9 +4,11 @@
 #include <vector>
 #include <chrono>
 #include <unistd.h>
-
+#include "DBLogger.hpp"
 #include "OrderBookManager.hpp"
 #include "MarketDataServer.hpp"
+
+static DBLogger DB;
 
 // helper to get monotonic timestamp in nanoseconds
 static uint64_t now_nanos() {
@@ -45,6 +47,9 @@ static inline std::string trim(const std::string& s) {
 }
 
 int main() {
+    // Initialize database logger
+    DB.init("trading.db");
+    
     // Start WS market-data server
     unsigned short md_port = 9002;
     MarketDataServerAPI::start(md_port);
@@ -121,6 +126,10 @@ int main() {
             o.timestamp = now_nanos();
 
             auto trades = mgr.addOrder(symbol, o);
+            DB.logOrder(o);
+            for (const auto &t : trades) {
+                DB.logTrade(t, symbol);
+            }
             for (const auto &t : trades) printTradeJSON(t);
 
         } else if (cmd == "CANCEL") {

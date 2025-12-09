@@ -59,9 +59,6 @@ void broadcastTop(const std::string& symbol) {
         asks_json.push_back({ {"price", lvl.price}, {"qty", lvl.size} });
     }
 
-    j["bids"] = bids_json;
-    j["asks"] = asks_json;
-
     json j = {
         {"type", "top"},
         {"symbol", symbol},
@@ -69,6 +66,9 @@ void broadcastTop(const std::string& symbol) {
         {"bestAsk", book.asks.empty() ? nullptr : json(bestAsk)},
         {"timestamp", (uint64_t) std::chrono::steady_clock::now().time_since_epoch().count()}
     };
+
+    j["bids"] = bids_json;
+    j["asks"] = asks_json;
 
     broadcast(j);
 }
