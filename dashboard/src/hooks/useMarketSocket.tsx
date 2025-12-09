@@ -126,5 +126,38 @@ export function useMarketSocket(url = WS_URL) {
     return { top, trades: trades.reverse() };
   }
 
-  return { connected, messages, latestForSymbol, sendRaw };
+  function buildCandles(trades: TradeMsg[], intervalMs = 2000) {
+    if (!trades.length) return [];
+
+    const buckets: Record<
+      number,
+      { open: number; high: number; low: number; close: number }
+    > = {};
+
+    for (const t of trades) {
+      const ts = t.ts || 0;
+      const bucket = Math.floor(ts / intervalMs);
+
+      if (!buckets[bucket]) {
+        buckets[bucket] = {
+          open: t.price,
+          high: t.price,
+          low: t.price,
+          close: t.price,
+        };
+      }
+
+      const b = buckets[bucket];
+      b.high = Math.max(b.high, t.price);
+      b.low = Math.min(b.low, t.price);
+      b.close = t.price;
+    }
+
+    return Object.entries(buckets).map(([k, v]) => ({
+      bucket: Number(k),
+      ...v,
+    }));
+  }
+
+  return { connected, messages, latestForSymbol, sendRaw, buildCandles };
 }

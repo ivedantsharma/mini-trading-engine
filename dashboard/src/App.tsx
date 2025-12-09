@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import TopOfBook from "./components/TopOfBook";
 import OrderBookDepth from "./components/OrderBookDepth";
 import PriceSpark from "./components/PriceSpark";
+import CandlestickChart from "./components/CandlestickChart";
 import TradesTape from "./components/TradesTape";
 import OrderEntry from "./components/OrderEntry";
 
@@ -11,7 +12,16 @@ export default function App() {
   const [symbol, setSymbol] = useState("AAPL");
 
   // Hook now provides sendRaw()
-  const { connected, latestForSymbol, sendRaw } = useMarketSocket();
+  const { connected, latestForSymbol, sendRaw, buildCandles } =
+    useMarketSocket();
+
+  // Attach optional handlers to a global `ws` if something else exposes it
+  useEffect(() => {
+    const w = (window as unknown as { ws?: WebSocket }).ws;
+    if (!w) return;
+    w.onopen = () => console.log("CONNECTED TO API SERVER");
+    w.onerror = (err: Event) => console.error("WS ERROR:", err);
+  }, []);
 
   const { top, trades } = latestForSymbol(symbol);
 
@@ -78,6 +88,12 @@ export default function App() {
           <div className="space-y-6">
             <OrderBookDepth bids={bids} asks={asks} />
             <PriceSpark trades={trades} />
+
+            {/** Candles built from recent trades */}
+            {(() => {
+              const candles = buildCandles(trades);
+              return <CandlestickChart candles={candles} />;
+            })()}
 
             {/* Order Entry Form */}
             <OrderEntry currentSymbol={symbol} sendRaw={sendRaw} />
