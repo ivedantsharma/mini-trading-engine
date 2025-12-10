@@ -7,3 +7,5 @@ add_executable(api_server ${API_SRC} ${API_HEADERS})
 
 target_include_directories(api_server PUBLIC include ../engine/include)
 target_link_libraries(api_server engine)
+
+target_include_directories(api_server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

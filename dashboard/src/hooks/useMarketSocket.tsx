@@ -30,6 +30,12 @@ export function useMarketSocket(url = WS_URL) {
   const [connected, setConnected] = useState(false);
   const [messages, setMessages] = useState<MDMsg[]>([]);
 
+  // Replay state
+  const [replayMode, setReplayMode] = useState(false);
+  const [replayBuffer, setReplayBuffer] = useState<TradeMsg[]>([]);
+  const [isReplayPlaying, setIsReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState(1);
+
   useEffect(() => {
     let ws: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout>;
@@ -80,6 +86,21 @@ export function useMarketSocket(url = WS_URL) {
             };
             setMessages((m) => [...m.slice(-499), tr]);
           }
+
+          if (parsed.type === "replayData") {
+            const trades = parsed.trades.map((t: any) => ({
+              type: "trade",
+              symbol: t.symbol,
+              tradeId: t.tradeId,
+              price: t.price,
+              quantity: t.quantity,
+              buyOrderId: t.buyOrderId,
+              sellOrderId: t.sellOrderId,
+              ts: t.timestamp,
+            }));
+            setReplayBuffer(trades);
+            return;
+          }
         } catch (err) {
           console.warn("[WS] Failed to parse message:", e.data);
         }
@@ -96,6 +117,23 @@ export function useMarketSocket(url = WS_URL) {
     };
   }, [url]);
 
+  // Replay playback effect
+  useEffect(() => {
+    if (!replayMode || !isReplayPlaying) return;
+
+    let idx = 0;
+    const interval = setInterval(() => {
+      if (idx >= replayBuffer.length) {
+        clearInterval(interval);
+        return;
+      }
+      const tr = replayBuffer[idx++];
+      setMessages((m) => [...m.slice(-499), tr]);
+    }, 200 / replaySpeed); // speed control
+
+    return () => clearInterval(interval);
+  }, [replayMode, isReplayPlaying, replayBuffer, replaySpeed]);
+
   // Sending raw command (NEW/CANCEL)
   function sendRaw(s: string) {
     if (!wsRef.current) {
@@ -107,6 +145,19 @@ export function useMarketSocket(url = WS_URL) {
     } else {
       console.warn("WS not open, cannot send:", s);
     }
+  }
+
+  function requestReplay(symbol: string, from: number, to: number) {
+    if (!wsRef.current) return;
+
+    const msg = JSON.stringify({
+      cmd: "REPLAY",
+      symbol,
+      from,
+      to,
+    });
+
+    wsRef.current.send(msg);
   }
 
   function latestForSymbol(symbol: string) {
@@ -159,5 +210,20 @@ export function useMarketSocket(url = WS_URL) {
     }));
   }
 
-  return { connected, messages, latestForSymbol, sendRaw, buildCandles };
+  return {
+    connected,
+    messages,
+    latestForSymbol,
+    sendRaw,
+    buildCandles,
+    replayMode,
+    setReplayMode,
+    replayBuffer,
+    setReplayBuffer,
+    isReplayPlaying,
+    setIsReplayPlaying,
+    replaySpeed,
+    setReplaySpeed,
+    requestReplay,
+  };
 }

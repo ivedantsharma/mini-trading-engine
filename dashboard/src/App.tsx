@@ -15,6 +15,17 @@ export default function App() {
   const { connected, latestForSymbol, sendRaw, buildCandles } =
     useMarketSocket();
 
+  // Replay controls
+  const {
+    replayMode,
+    setReplayMode,
+    requestReplay,
+    replaySpeed,
+    setReplaySpeed,
+    isReplayPlaying,
+    setIsReplayPlaying,
+  } = useMarketSocket();
+
   // Attach optional handlers to a global `ws` if something else exposes it
   useEffect(() => {
     const w = (window as unknown as { ws?: WebSocket }).ws;
@@ -60,6 +71,50 @@ export default function App() {
               onChange={(e) => setSymbol(e.target.value.toUpperCase())}
               className="bg-gray-800 px-2 py-1 rounded text-white w-20"
             />
+          </div>
+
+          <div className="flex items-center gap-3">
+            <select
+              value={replayMode ? "REPLAY" : "LIVE"}
+              onChange={(e) => setReplayMode(e.target.value === "REPLAY")}
+              className="bg-gray-800 text-white px-2 py-1 rounded"
+            >
+              <option value="LIVE">LIVE</option>
+              <option value="REPLAY">REPLAY</option>
+            </select>
+
+            {replayMode && (
+              <>
+                <button
+                  className="bg-blue-600 px-2 py-1 rounded"
+                  onClick={() => {
+                    requestReplay(symbol, 0, Date.now() * 1e6);
+                    setIsReplayPlaying(true);
+                  }}
+                >
+                  Load Replay
+                </button>
+
+                <button
+                  className="bg-green-600 px-2 py-1 rounded"
+                  onClick={() => setIsReplayPlaying(!isReplayPlaying)}
+                >
+                  {isReplayPlaying ? "Pause" : "Play"}
+                </button>
+
+                <select
+                  value={replaySpeed}
+                  onChange={(e) => setReplaySpeed(Number(e.target.value))}
+                  className="bg-gray-800 text-white px-2 py-1 rounded"
+                >
+                  <option value="0.5">0.5x</option>
+                  <option value="1">1x</option>
+                  <option value="2">2x</option>
+                  <option value="5">5x</option>
+                  <option value="10">10x</option>
+                </select>
+              </>
+            )}
           </div>
 
           <span
