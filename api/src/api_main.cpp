@@ -15,6 +15,17 @@ namespace websocket = beast::websocket;
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
+// ------------------- Risk Limits --------------------
+static const uint32_t MAX_ORDER_SIZE = 10000;
+static const double MAX_DAILY_LOSS = -50000.0;
+static const uint32_t MAX_EXPOSURE = 1000;
+static const double MAX_PRICE_DEVIATION_PCT = 10.0; // max 10% away from market
+
+static std::unordered_map<std::string, int64_t> positionQty;
+static std::unordered_map<std::string, double> avgPrice;
+static double realizedPnL = 0.0;
+
+
 // Forward declarations
 void start_rest_server();
 json fetchTradesForReplay(const std::string& symbol, uint64_t ts_from, uint64_t ts_to);
@@ -237,16 +248,52 @@ void handleNewOrder(const json& message) {
     // Mark this orderId as a user-submitted order so portfolio tracks it
     mark_user_order(ord.orderId);
 
+    std::string reason;
+    if (!checkRisk(ord, reason)) {
+        json reject = {
+            {"type", "orderReject"},
+            {"orderId", ord.orderId},
+            {"reason", reason}
+        };
+        broadcast(reject);
+        return; // STOP HERE
+    }
+
+    // If risk passed → process order
     auto trades = book.addOrder(ord);
 
     for (auto& t : trades) {
-        // Persist + broadcast existing code...
         saveTradeToDB(t, ord.symbol);
         updateCandlesOnTrade(t, ord.symbol);
 
         // Update our portfolio only if this trade involved a user order
         record_trade_for_order(t.buyOrderId, ord.symbol, true, t.quantity, t.price);
         record_trade_for_order(t.sellOrderId, ord.symbol, false, t.quantity, t.price);
+
+        // ----- Position & PnL calculation ------
+        int qty = t.quantity;
+        double price = t.price;
+
+        if (ord.side == Side::BUY) {
+            // Increase long
+            int64_t newQty = positionQty[ord.symbol] + qty;
+
+            // Recalculate average price
+            avgPrice[ord.symbol] =
+                ((avgPrice[ord.symbol] * positionQty[ord.symbol]) + price * qty) /
+                newQty;
+
+            positionQty[ord.symbol] = newQty;
+        } else {
+            // Sell reduces position
+            int64_t previousQty = positionQty[ord.symbol];
+            positionQty[ord.symbol] -= qty;
+
+            // Realized pnl only when reducing position
+            if (previousQty > 0) {
+                realizedPnL += (price - avgPrice[ord.symbol]) * qty;
+            }
+        }
 
         broadcast(tradeToJSON(t, ord.symbol));
     }
@@ -267,6 +314,47 @@ void handleNewOrder(const json& message) {
     }
     json pj = { {"type", "positions"}, {"positions", pos_arr} };
     broadcast(pj);
+}
+
+bool checkRisk(const Order &ord, std::string &reason) {
+
+    // 1. Order size limit
+    if (ord.quantity > MAX_ORDER_SIZE) {
+        reason = "Order size exceeds limit";
+        return false;
+    }
+
+    // 2. Check max exposure
+    int64_t futureExposure =
+        positionQty[ord.symbol] + (ord.side == Side::BUY ? ord.quantity : 0);
+
+    if (std::abs(futureExposure) > MAX_EXPOSURE) {
+        reason = "Exposure limit exceeded";
+        return false;
+    }
+
+    // 3. Daily loss check
+    if (realizedPnL < MAX_DAILY_LOSS) {
+        reason = "Trading halted: Loss limit exceeded";
+        return false;
+    }
+
+    // 4. Price deviation
+    if (ord.type == OrderType::LIMIT) {
+        double bestBid = book.bids.empty() ? 0.0 : book.bids.begin()->first;
+        double bestAsk = book.asks.empty() ? 0.0 : book.asks.begin()->first;
+
+        double mid = (bestBid + bestAsk) / 2.0;
+        if (mid > 0) {
+            double dev = std::abs(ord.price - mid) / mid * 100.0;
+            if (dev > MAX_PRICE_DEVIATION_PCT) {
+                reason = "Order price too far from market";
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 void handleCancel(const json& message) {
