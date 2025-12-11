@@ -5,7 +5,7 @@
 #include <boost/beast.hpp>
 #include <boost/beast/websocket.hpp>
 #include <nlohmann/json.hpp>
-
+#include "Positions.hpp"
 #include "../../engine/include/OrderBook.hpp"
 #include <sqlite3.h>
 
@@ -233,20 +233,40 @@ void handleNewOrder(const json& message) {
     ord.price = o["price"];
     ord.quantity = o["quantity"];
     ord.timestamp = (uint64_t) std::chrono::steady_clock::now().time_since_epoch().count();
+    
+    // Mark this orderId as a user-submitted order so portfolio tracks it
+    mark_user_order(ord.orderId);
 
     auto trades = book.addOrder(ord);
 
     for (auto& t : trades) {
-        // Save trade to DB and update candles
+        // Persist + broadcast existing code...
         saveTradeToDB(t, ord.symbol);
         updateCandlesOnTrade(t, ord.symbol);
 
-        // Broadcast to connected clients
+        // Update our portfolio only if this trade involved a user order
+        record_trade_for_order(t.buyOrderId, ord.symbol, true, t.quantity, t.price);
+        record_trade_for_order(t.sellOrderId, ord.symbol, false, t.quantity, t.price);
+
         broadcast(tradeToJSON(t, ord.symbol));
     }
 
     // broadcast top-of-book after changes
     broadcastTop(ord.symbol);
+
+    // Broadcast positions snapshot to WS clients
+    auto pos_snap = snapshot_positions();
+    json pos_arr = json::array();
+    for (auto &kv : pos_snap) {
+        pos_arr.push_back({
+            {"symbol", kv.first},
+            {"qty", kv.second.qty},
+            {"avgPrice", kv.second.avgPrice},
+            {"realizedPnl", kv.second.realizedPnl}
+        });
+    }
+    json pj = { {"type", "positions"}, {"positions", pos_arr} };
+    broadcast(pj);
 }
 
 void handleCancel(const json& message) {

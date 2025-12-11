@@ -4,6 +4,7 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include "../include/httplib.h"
+#include "Positions.hpp"
 
 using json = nlohmann::json;
 
@@ -115,6 +116,21 @@ void start_rest_server() {
         int limit = std::stoi(limit_str);
         json data = getCandles(symbol, tf, limit);
         res.set_content(data.dump(), "application/json");
+    });
+
+    // GET /positions
+    svr.Get("/positions", [](const httplib::Request& req, httplib::Response& res) {
+        auto snap = snapshot_positions();
+        nlohmann::json arr = nlohmann::json::array();
+        for (auto &kv : snap) {
+            arr.push_back({
+                {"symbol", kv.first},
+                {"qty", kv.second.qty},
+                {"avgPrice", kv.second.avgPrice},
+                {"realizedPnl", kv.second.realizedPnl}
+            });
+        }
+        res.set_content(arr.dump(), "application/json");
     });
 
     std::cout << "[REST] Listening on http://localhost:9003\n";
