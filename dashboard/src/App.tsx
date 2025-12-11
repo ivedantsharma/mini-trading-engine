@@ -5,7 +5,7 @@ import PriceSpark from "./components/PriceSpark";
 import CandlestickChart from "./components/CandlestickChart";
 import TradesTape from "./components/TradesTape";
 import OrderEntry from "./components/OrderEntry";
-
+import PositionsPanel from "./components/PositionsPanel";
 import { useMarketSocket } from "./hooks/useMarketSocket";
 import CandleChart from "./components/CandleChart";
 
@@ -161,6 +161,9 @@ export default function App() {
         <div>
           <TradesTape trades={trades} />
         </div>
+      </div>
+      <div className="mt-4">
+        <PositionsPanel />
       </div>
     </div>
   );

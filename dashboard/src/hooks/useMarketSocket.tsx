@@ -21,7 +21,17 @@ export type TradeMsg = {
   ts?: number;
 };
 
-export type MDMsg = TopMsg | TradeMsg;
+export type PositionsMsg = {
+  type: "positions";
+  positions: {
+    symbol: string;
+    qty: number;
+    avgPrice: number;
+    realizedPnl: number;
+  }[];
+};
+
+export type MDMsg = TopMsg | TradeMsg | PositionsMsg;
 
 const WS_URL = "ws://localhost:9001";
 
