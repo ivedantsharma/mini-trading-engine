@@ -1,4 +1,3 @@
-import React from "react";
 import { LineChart, Line, ResponsiveContainer } from "recharts";
 import type { TradeMsg } from "../hooks/useMarketSocket";
 

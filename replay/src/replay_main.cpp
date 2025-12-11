@@ -41,8 +41,8 @@ std::vector<ReplayTrade> loadTrades() {
     sqlite3_stmt* stmt;
 
     const char* q =
-        "SELECT tradeId, symbol, price, quantity, ts "
-        "FROM Trades ORDER BY ts ASC;";
+        "SELECT tradeId, symbol, price, quantity, timestamp "
+        "FROM Trades ORDER BY timestamp ASC;";
 
     if (sqlite3_prepare_v2(db, q, -1, &stmt, nullptr) != SQLITE_OK)
         fail("Cannot run query Trades");

@@ -1,5 +1,3 @@
-import React from "react";
-
 type Level = { price: number; qty: number };
 
 type Props = {

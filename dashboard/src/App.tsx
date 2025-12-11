@@ -7,6 +7,7 @@ import TradesTape from "./components/TradesTape";
 import OrderEntry from "./components/OrderEntry";
 
 import { useMarketSocket } from "./hooks/useMarketSocket";
+import CandleChart from "./components/CandleChart";
 
 export default function App() {
   const [symbol, setSymbol] = useState("AAPL");
@@ -143,6 +144,7 @@ export default function App() {
           <div className="space-y-6">
             <OrderBookDepth bids={bids} asks={asks} />
             <PriceSpark trades={trades} />
+            <CandleChart symbol={symbol} trades={trades} />
 
             {/** Candles built from recent trades */}
             {(() => {
