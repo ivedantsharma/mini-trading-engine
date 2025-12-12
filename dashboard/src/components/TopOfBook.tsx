@@ -1,3 +1,5 @@
+import React from "react";
+
 type Props = {
   symbol: string;
   bestBid: number | null;
@@ -5,24 +7,34 @@ type Props = {
 };
 
 export default function TopOfBook({ symbol, bestBid, bestAsk }: Props) {
+  const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(2) : "-.--";
   return (
-    <div className="grid grid-cols-2 gap-4 p-3 bg-gray-900 rounded-lg shadow-md border border-gray-800">
-      <div>
-        <div className="text-xs text-gray-400">Symbol</div>
-        <div className="text-2xl font-mono text-white">{symbol}</div>
+    <div className="flex flex-col gap-2 w-full">
+      {/* Header Row */}
+      <div className="flex justify-between items-center text-[10px] text-gray-500 uppercase tracking-wider px-1">
+        <span className="font-semibold">Spread</span>
+        <span className="text-gray-300 font-mono">{spread}</span>
       </div>
-      <div className="flex flex-col items-end">
-        <div className="flex gap-3">
-          <div className="text-xs text-gray-400">Best Bid</div>
-          <div className="text-xl font-mono text-green-400">
-            {bestBid !== null ? bestBid.toFixed(2) : "--"}
-          </div>
+
+      <div className="flex gap-2">
+        {/* BID BOX - Compact */}
+        <div className="flex-1 bg-[#16241a] border border-[#0ecb81]/30 rounded px-3 py-2 flex justify-between items-baseline shadow-sm">
+          <span className="text-[10px] text-[#0ecb81] font-bold uppercase mr-2">
+            Bid
+          </span>
+          <span className="text-lg font-mono text-[#0ecb81] font-medium tracking-tight">
+            {bestBid?.toFixed(2) ?? "---"}
+          </span>
         </div>
-        <div className="mt-2 flex gap-3">
-          <div className="text-xs text-gray-400">Best Ask</div>
-          <div className="text-xl font-mono text-red-400">
-            {bestAsk !== null ? bestAsk.toFixed(2) : "--"}
-          </div>
+
+        {/* ASK BOX - Compact */}
+        <div className="flex-1 bg-[#2a141a] border border-[#f6465d]/30 rounded px-3 py-2 flex justify-between items-baseline shadow-sm">
+          <span className="text-[10px] text-[#f6465d] font-bold uppercase mr-2">
+            Ask
+          </span>
+          <span className="text-lg font-mono text-[#f6465d] font-medium tracking-tight">
+            {bestAsk?.toFixed(2) ?? "---"}
+          </span>
         </div>
       </div>
     </div>

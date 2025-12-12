@@ -1,5 +1,9 @@
-// dashboard/src/hooks/useMarketSocket.tsx
 import { useEffect, useRef, useState } from "react";
+
+// Define strict types for window to avoid 'any' error
+interface CustomWindow extends Window {
+  ws?: WebSocket;
+}
 
 export type TopMsg = {
   type: "top";
@@ -36,9 +40,7 @@ export type MDMsg = TopMsg | TradeMsg | PositionsMsg;
 
 const WS_URL = "ws://localhost:9001";
 
-/* RawTrade - shape coming from backend / DB for replay/results.
-   We use this to avoid `any` in map() callbacks.
-*/
+/* RawTrade - shape coming from backend / DB for replay/results. */
 type RawTrade = {
   symbol: string;
   tradeId: number;
@@ -49,6 +51,19 @@ type RawTrade = {
   sellOrderId?: number;
   timestamp?: number;
   ts?: number;
+};
+
+/* Raw shapes for parsing JSON safely */
+type RawOrderBookItem = {
+  price?: unknown;
+  qty?: unknown;
+};
+
+type RawPositionItem = {
+  symbol?: unknown;
+  qty?: unknown;
+  avgPrice?: unknown;
+  realizedPnl?: unknown;
 };
 
 export function useMarketSocket(url = WS_URL) {
@@ -70,6 +85,9 @@ export function useMarketSocket(url = WS_URL) {
       ws = new WebSocket(url);
       wsRef.current = ws;
 
+      // Type-safe window assignment
+      (window as unknown as CustomWindow).ws = ws;
+
       ws.onopen = () => {
         setConnected(true);
         console.log("[WS] Connected to", url);
@@ -87,21 +105,16 @@ export function useMarketSocket(url = WS_URL) {
       };
 
       ws.onmessage = (e) => {
-        // parse safely (we still trust backend shape but avoid `any` in maps)
         let parsed: unknown;
         try {
           parsed = JSON.parse(e.data);
 
-          // Check if parsed is a valid object (and not null)
           if (typeof parsed === "object" && parsed !== null) {
-            // Cast to a generic record to access properties safely
             const p = parsed as Record<string, unknown>;
-
             if ("sendTs" in p) {
-              const serverTs = Number(p.sendTs);
-              const clientTs = performance.now() * 1e6; // ms → ns
-              const latency = clientTs - serverTs;
-              console.log("[Market Data Latency ns]", latency);
+              // const serverTs = Number(p.sendTs);
+              // const clientTs = performance.now() * 1e6;
+              // console.log("[Latency]", clientTs - serverTs);
             }
           }
         } catch {
@@ -109,7 +122,6 @@ export function useMarketSocket(url = WS_URL) {
           return;
         }
 
-        // Basic guard: parsed must be object with a `type` property
         if (
           typeof parsed !== "object" ||
           parsed === null ||
@@ -128,29 +140,22 @@ export function useMarketSocket(url = WS_URL) {
             bestBid: p.bestBid == null ? null : Number(p.bestBid),
             bestAsk: p.bestAsk == null ? null : Number(p.bestAsk),
             bids: Array.isArray(p.bids)
-              ? (p.bids as unknown[]).map((b) => {
-                  const item = b as Record<string, unknown>;
-                  return {
-                    price: Number(item.price),
-                    qty: Number(item.qty),
-                  };
-                })
+              ? (p.bids as RawOrderBookItem[]).map((b) => ({
+                  price: Number(b.price),
+                  qty: Number(b.qty),
+                }))
               : undefined,
             asks: Array.isArray(p.asks)
-              ? (p.asks as unknown[]).map((a) => {
-                  const item = a as Record<string, unknown>;
-                  return {
-                    price: Number(item.price),
-                    qty: Number(item.qty),
-                  };
-                })
+              ? (p.asks as RawOrderBookItem[]).map((a) => ({
+                  price: Number(a.price),
+                  qty: Number(a.qty),
+                }))
               : undefined,
             ts: p.ts ? Number(p.ts) : undefined,
           };
           setMessages((m) => [...m.slice(-499), top]);
           return;
         } else if (t === "trade") {
-          // parse trade message
           const tr: TradeMsg = {
             type: "trade",
             symbol: String(p.symbol || ""),
@@ -169,26 +174,21 @@ export function useMarketSocket(url = WS_URL) {
           setMessages((m) => [...m.slice(-499), tr]);
           return;
         } else if (t === "positions") {
-          // positions update
           const rawPositions = Array.isArray(p.positions)
-            ? (p.positions as unknown[])
+            ? (p.positions as RawPositionItem[])
             : [];
           const posMsg: PositionsMsg = {
             type: "positions",
-            positions: rawPositions.map((item) => {
-              const pp = item as Record<string, unknown>;
-              return {
-                symbol: String(pp.symbol || ""),
-                qty: Number(pp.qty || 0),
-                avgPrice: Number(pp.avgPrice || 0),
-                realizedPnl: Number(pp.realizedPnl || 0),
-              };
-            }),
+            positions: rawPositions.map((pp) => ({
+              symbol: String(pp.symbol || ""),
+              qty: Number(pp.qty || 0),
+              avgPrice: Number(pp.avgPrice || 0),
+              realizedPnl: Number(pp.realizedPnl || 0),
+            })),
           };
           setMessages((m) => [...m.slice(-499), posMsg]);
           return;
         } else if (t === "replayData") {
-          // parsed.trades expected to be array of trade rows; map safely to TradeMsg
           const tradesArray = Array.isArray(p.trades)
             ? (p.trades as unknown[])
             : [];
@@ -209,8 +209,6 @@ export function useMarketSocket(url = WS_URL) {
           setReplayBuffer(trades);
           return;
         }
-
-        // unknown type — ignore
       };
     }
 
@@ -236,12 +234,11 @@ export function useMarketSocket(url = WS_URL) {
       }
       const tr = replayBuffer[idx++];
       setMessages((m) => [...m.slice(-499), tr]);
-    }, 200 / Math.max(1, replaySpeed)); // speed control (avoid division by 0)
+    }, 200 / Math.max(1, replaySpeed));
 
     return () => clearInterval(interval);
   }, [replayMode, isReplayPlaying, replayBuffer, replaySpeed]);
 
-  // Sending raw command (NEW/CANCEL)
   function sendRaw(s: string) {
     if (!wsRef.current) {
       console.warn("WS missing:", s);
@@ -256,14 +253,7 @@ export function useMarketSocket(url = WS_URL) {
 
   function requestReplay(symbol: string, from: number, to: number) {
     if (!wsRef.current) return;
-
-    const msg = JSON.stringify({
-      cmd: "REPLAY",
-      symbol,
-      from,
-      to,
-    });
-
+    const msg = JSON.stringify({ cmd: "REPLAY", symbol, from, to });
     wsRef.current.send(msg);
   }
 
@@ -274,10 +264,8 @@ export function useMarketSocket(url = WS_URL) {
     for (let i = messages.length - 1; i >= 0; --i) {
       const m = messages[i];
 
-      // skip positions messages (they don't have symbol)
       if (m.type === "positions") continue;
 
-      // now narrowed: m is TopMsg | TradeMsg
       if ((m as TopMsg).symbol !== symbol) continue;
 
       if (m.type === "top" && !top) top = m as TopMsg;
@@ -298,7 +286,6 @@ export function useMarketSocket(url = WS_URL) {
     > = {};
 
     for (const t of trades) {
-      // convert nanoseconds -> milliseconds (backend is using steady_clock nanos)
       const tsMs = Math.floor((t.ts || 0) / 1_000_000);
       const bucket = Math.floor(tsMs / intervalMs);
 

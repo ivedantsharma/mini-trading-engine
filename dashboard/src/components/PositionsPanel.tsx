@@ -18,14 +18,13 @@ export default function PositionsPanel() {
     const last = messages[messages.length - 1];
 
     if (last.type === "positions") {
-      // Defer setState to avoid React 19 warning
       queueMicrotask(() => {
         setPositions(last.positions ?? []);
       });
     }
   }, [messages]);
 
-  // Initial fetch from REST
+  // Initial fetch
   useEffect(() => {
     async function load() {
       try {
@@ -41,39 +40,58 @@ export default function PositionsPanel() {
   }, []);
 
   return (
-    <div className="p-4 bg-gray-900 rounded-xl text-gray-100 shadow-md">
-      <h2 className="text-lg font-semibold mb-3">Portfolio Positions</h2>
+    <div className="flex flex-col h-full w-full bg-[#181a20] text-xs">
+      {/* Sticky Header */}
+      <div className="grid grid-cols-4 px-3 py-2 bg-[#0b0e11] border-b border-[#2b3139] text-gray-500 font-semibold sticky top-0 z-10">
+        <span className="text-left">Symbol</span>
+        <span className="text-right">Size</span>
+        <span className="text-right">Entry Price</span>
+        <span className="text-right">Realized PnL</span>
+      </div>
 
-      {positions.length === 0 ? (
-        <p className="text-gray-400">No positions yet.</p>
-      ) : (
-        <table className="w-full text-sm">
-          <thead className="text-gray-400 border-b border-gray-700">
-            <tr>
-              <th className="text-left py-1">Symbol</th>
-              <th className="text-left py-1">Qty</th>
-              <th className="text-left py-1">Avg Price</th>
-              <th className="text-left py-1">Realized PnL</th>
-            </tr>
-          </thead>
-          <tbody>
-            {positions.map((p) => (
-              <tr key={p.symbol} className="border-b border-gray-800">
-                <td className="py-1">{p.symbol}</td>
-                <td className="py-1">{p.qty}</td>
-                <td className="py-1">{p.avgPrice.toFixed(2)}</td>
-                <td
-                  className={`py-1 ${
-                    p.realizedPnl >= 0 ? "text-green-400" : "text-red-400"
-                  }`}
-                >
-                  {p.realizedPnl.toFixed(2)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      {/* Scrollable Body */}
+      <div className="flex-1 overflow-y-auto min-h-0">
+        {positions.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-gray-600 italic">
+            <span>No open positions</span>
+          </div>
+        ) : (
+          positions.map((p) => (
+            <div
+              key={p.symbol}
+              className="grid grid-cols-4 px-3 py-2 border-b border-[#2b3139] hover:bg-[#2b3139] transition-colors group"
+            >
+              <span className="text-white font-bold">{p.symbol}</span>
+              <span
+                className={`text-right font-mono ${
+                  p.qty > 0
+                    ? "text-green-400"
+                    : p.qty < 0
+                    ? "text-red-400"
+                    : "text-gray-300"
+                }`}
+              >
+                {p.qty}
+              </span>
+              <span className="text-right text-gray-300 font-mono">
+                {p.avgPrice.toFixed(2)}
+              </span>
+              <span
+                className={`text-right font-mono font-medium ${
+                  p.realizedPnl > 0
+                    ? "text-[#0ecb81]"
+                    : p.realizedPnl < 0
+                    ? "text-[#f6465d]"
+                    : "text-gray-400"
+                }`}
+              >
+                {p.realizedPnl > 0 ? "+" : ""}
+                {p.realizedPnl.toFixed(2)}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
     </div>
   );
 }

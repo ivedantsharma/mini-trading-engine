@@ -18,12 +18,12 @@ type Candle = {
 };
 
 export default function CandleChart({ symbol, trades }: Props) {
-  const chartRef = useRef<HTMLDivElement | null>(null);
+  const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const chartApiRef = useRef<ReturnType<typeof createChart> | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
 
-  // Load initial candles from REST
+  // 1. Data Loading (Unchanged)
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -36,7 +36,6 @@ export default function CandleChart({ symbol, trades }: Props) {
         if (!res.ok) return;
         const data = await res.json();
 
-        // API returns candles ordered newest->oldest; we convert & reverse
         type ApiCandle = {
           start_ts: number | string;
           open: number | string;
@@ -47,7 +46,6 @@ export default function CandleChart({ symbol, trades }: Props) {
 
         const formatted: Candle[] = (data || [])
           .map((c: ApiCandle) => {
-            // start_ts is stored in nanoseconds in your DB; convert to seconds
             const timeSec = Math.floor(Number(c.start_ts) / 1e9);
             return {
               time: timeSec as UTCTimestamp,
@@ -74,14 +72,16 @@ export default function CandleChart({ symbol, trades }: Props) {
     };
   }, [symbol]);
 
-  // Initialize chart once
+  // 2. Initialize Chart with Dynamic Sizing
   useEffect(() => {
-    if (!chartRef.current) return;
+    if (!chartContainerRef.current) return;
 
-    // Create chart
-    const chart = createChart(chartRef.current, {
-      width: chartRef.current.clientWidth,
-      height: 320,
+    // Get the exact dimensions of the parent container
+    const { clientWidth, clientHeight } = chartContainerRef.current;
+
+    const chart = createChart(chartContainerRef.current, {
+      width: clientWidth,
+      height: clientHeight, // Use dynamic height
       layout: {
         background: { color: "#0b0f19" },
         textColor: "#cbd5e1",
@@ -103,21 +103,27 @@ export default function CandleChart({ symbol, trades }: Props) {
       wickDownColor: "#ef4444",
     });
 
-    // Save reference
     seriesRef.current = candleSeries;
     chartApiRef.current = chart;
 
-    // Load existing data if present
     if (candles.length) candleSeries.setData(candles);
 
+    // 3. Resize Observer for responsiveness
+    // This handles window resizing AND container resizing automatically
     const handleResize = () => {
-      if (!chartRef.current || !chartApiRef.current) return;
-      chartApiRef.current.applyOptions({ width: chartRef.current.clientWidth });
+      if (chartContainerRef.current && chartApiRef.current) {
+        chartApiRef.current.applyOptions({
+          width: chartContainerRef.current.clientWidth,
+          height: chartContainerRef.current.clientHeight,
+        });
+      }
     };
 
-    window.addEventListener("resize", handleResize);
+    const resizeObserver = new ResizeObserver(() => handleResize());
+    resizeObserver.observe(chartContainerRef.current);
+
     return () => {
-      window.removeEventListener("resize", handleResize);
+      resizeObserver.disconnect();
       try {
         chartApiRef.current?.remove();
       } catch {
@@ -127,26 +133,21 @@ export default function CandleChart({ symbol, trades }: Props) {
       seriesRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // run only once
+  }, []);
 
-  // Live updating from trade stream (bucket = 60-sec)
+  // 4. Live Updates (Unchanged)
   useEffect(() => {
     if (!trades.length || !seriesRef.current) return;
-
     const lastTrade = trades[trades.length - 1];
-
-    // guard: require timestamp to update candles
     if (!lastTrade.ts) return;
 
-    // lastTrade.ts in your system is nanoseconds; convert to seconds
     const tradeSec = Math.floor(Number(lastTrade.ts) / 1e9);
-    const bucketStart = Math.floor(tradeSec / 60) * 60; // 60-second TF
+    const bucketStart = Math.floor(tradeSec / 60) * 60;
 
     setCandles((prev) => {
       const prevLast = prev.length ? prev[prev.length - 1] : undefined;
 
       if (!prevLast || prevLast.time < (bucketStart as UTCTimestamp)) {
-        // new candle
         const newCandle: Candle = {
           time: bucketStart as UTCTimestamp,
           open: lastTrade.price,
@@ -154,12 +155,9 @@ export default function CandleChart({ symbol, trades }: Props) {
           low: lastTrade.price,
           close: lastTrade.price,
         };
-
-        // update chart
         seriesRef.current!.update(newCandle);
         return [...prev, newCandle];
       } else {
-        // update existing candle
         const updated: Candle = {
           time: prevLast.time,
           open: prevLast.open,
@@ -167,16 +165,14 @@ export default function CandleChart({ symbol, trades }: Props) {
           low: Math.min(prevLast.low, lastTrade.price),
           close: lastTrade.price,
         };
-
         seriesRef.current!.update(updated);
-
         const clone = [...prev];
         clone[clone.length - 1] = updated;
         return clone;
       }
     });
-    // only when trades or seriesRef change
   }, [trades]);
 
-  return <div ref={chartRef} className="w-full" style={{ minHeight: 320 }} />;
+  // CSS: remove hardcoded style, use w-full h-full
+  return <div ref={chartContainerRef} className="w-full h-full" />;
 }
