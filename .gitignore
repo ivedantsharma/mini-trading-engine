@@ -4,3 +4,15 @@ build/
 node_modules/
 dist/
 .vscode/
+
+.DS_Store
+*.log
+*.swp
+*.swo
+*~
+.env
+.idea/
+*.iml
+Report.txt
+coverage/
+.nyc_output/
