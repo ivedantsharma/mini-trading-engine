@@ -8,6 +8,7 @@ import OrderEntry from "./components/OrderEntry";
 import PositionsPanel from "./components/PositionsPanel";
 import { useMarketSocket } from "./hooks/useMarketSocket";
 import CandleChart from "./components/CandleChart";
+import SymbolSelector from "./components/SymbolSelector";
 
 export default function App() {
   const [symbol, setSymbol] = useState("AAPL");
@@ -65,6 +66,10 @@ export default function App() {
         </h1>
 
         <div className="flex items-center gap-4">
+          <div className="text-gray-300 text-sm flex items-center gap-3">
+            <span>Symbol</span>
+            <SymbolSelector value={symbol} onChange={(s) => setSymbol(s)} />
+          </div>
           <div className="text-gray-300 text-sm">
             <span className="mr-2">Symbol</span>
             <input

@@ -15,22 +15,24 @@ struct TopOfBook {
 };
 
 class OrderBookManager {
-public:
-    OrderBookManager() : globalTradeId(1) {}
+    public:
+        OrderBookManager() : globalTradeId(1) {}
 
-    std::vector<Trade> addOrder(const std::string& symbol, const Order& order);
-    void cancelOrder(const std::string& symbol, uint64_t orderId);
+        std::vector<Trade> addOrder(const std::string& symbol, const Order& order);
+        void cancelOrder(const std::string& symbol, uint64_t orderId);
 
-    void printTopLevels() const;                  // print all symbols
-    void printTopLevels(const std::string& symbol) const; // print specific symbol
+        void printTopLevels() const;                  // print all symbols
+        void printTopLevels(const std::string& symbol) const; // print specific symbol
 
-private:
-    std::map<std::string, OrderBook> books;
-    std::map<std::string, TopOfBook> prevTop; // track previous top-of-book per symbol
-    uint64_t globalTradeId;
+        OrderBook* getOrderBook(const std::string& symbol);
 
-    // helpers
-    TopOfBook snapshotTop(const std::string& symbol) const;
-    void emitMarketDataTop(const std::string& symbol, const TopOfBook& top) const;
-    void emitTradeMD(const Trade& t, const std::string& symbol) const;
+    private:
+        std::map<std::string, OrderBook> books;
+        std::map<std::string, TopOfBook> prevTop; // track previous top-of-book per symbol
+        uint64_t globalTradeId;
+
+        // helpers
+        TopOfBook snapshotTop(const std::string& symbol) const;
+        void emitMarketDataTop(const std::string& symbol, const TopOfBook& top) const;
+        void emitTradeMD(const Trade& t, const std::string& symbol) const;
 };

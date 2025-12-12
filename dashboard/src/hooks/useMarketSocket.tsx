@@ -1,3 +1,4 @@
+// dashboard/src/hooks/useMarketSocket.tsx
 import { useEffect, useRef, useState } from "react";
 
 export type TopMsg = {
@@ -35,6 +36,21 @@ export type MDMsg = TopMsg | TradeMsg | PositionsMsg;
 
 const WS_URL = "ws://localhost:9001";
 
+/* RawTrade - shape coming from backend / DB for replay/results.
+   We use this to avoid `any` in map() callbacks.
+*/
+type RawTrade = {
+  symbol: string;
+  tradeId: number;
+  price: number;
+  quantity?: number;
+  qty?: number;
+  buyOrderId?: number;
+  sellOrderId?: number;
+  timestamp?: number;
+  ts?: number;
+};
+
 export function useMarketSocket(url = WS_URL) {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
@@ -71,49 +87,117 @@ export function useMarketSocket(url = WS_URL) {
       };
 
       ws.onmessage = (e) => {
+        // parse safely (we still trust backend shape but avoid `any` in maps)
+        let parsed: unknown;
         try {
-          const parsed = JSON.parse(e.data);
-
-          if (parsed.type === "top") {
-            const top: TopMsg = {
-              type: "top",
-              symbol: parsed.symbol,
-              bestBid: parsed.bestBid === null ? null : Number(parsed.bestBid),
-              bestAsk: parsed.bestAsk === null ? null : Number(parsed.bestAsk),
-              ts: parsed.ts ?? parsed.timestamp,
-            };
-            setMessages((m) => [...m.slice(-499), top]);
-          } else if (parsed.type === "trade") {
-            const tr: TradeMsg = {
-              type: "trade",
-              symbol: parsed.symbol,
-              tradeId: Number(parsed.tradeId),
-              price: Number(parsed.price),
-              quantity: Number(parsed.quantity ?? parsed.qty ?? 0),
-              buyOrderId: parsed.buyOrderId ?? parsed.buyId,
-              sellOrderId: parsed.sellOrderId ?? parsed.sellId,
-              ts: parsed.timestamp ?? parsed.ts,
-            };
-            setMessages((m) => [...m.slice(-499), tr]);
-          }
-
-          if (parsed.type === "replayData") {
-            const trades = parsed.trades.map((t: any) => ({
-              type: "trade",
-              symbol: t.symbol,
-              tradeId: t.tradeId,
-              price: t.price,
-              quantity: t.quantity,
-              buyOrderId: t.buyOrderId,
-              sellOrderId: t.sellOrderId,
-              ts: t.timestamp,
-            }));
-            setReplayBuffer(trades);
-            return;
-          }
-        } catch (err) {
-          console.warn("[WS] Failed to parse message:", e.data);
+          parsed = JSON.parse(e.data);
+        } catch {
+          console.warn("[WS] Received non-JSON message");
+          return;
         }
+
+        // Basic guard: parsed must be object with a `type` property
+        if (
+          typeof parsed !== "object" ||
+          parsed === null ||
+          !("type" in (parsed as object))
+        ) {
+          return;
+        }
+
+        const p = parsed as Record<string, unknown>;
+        const t = p.type as string;
+
+        if (t === "top") {
+          const top: TopMsg = {
+            type: "top",
+            symbol: String(p.symbol || ""),
+            bestBid: p.bestBid == null ? null : Number(p.bestBid),
+            bestAsk: p.bestAsk == null ? null : Number(p.bestAsk),
+            bids: Array.isArray(p.bids)
+              ? (p.bids as unknown[]).map((b) => {
+                  const item = b as Record<string, unknown>;
+                  return {
+                    price: Number(item.price),
+                    qty: Number(item.qty),
+                  };
+                })
+              : undefined,
+            asks: Array.isArray(p.asks)
+              ? (p.asks as unknown[]).map((a) => {
+                  const item = a as Record<string, unknown>;
+                  return {
+                    price: Number(item.price),
+                    qty: Number(item.qty),
+                  };
+                })
+              : undefined,
+            ts: p.ts ? Number(p.ts) : undefined,
+          };
+          setMessages((m) => [...m.slice(-499), top]);
+          return;
+        } else if (t === "trade") {
+          // parse trade message
+          const tr: TradeMsg = {
+            type: "trade",
+            symbol: String(p.symbol || ""),
+            tradeId: Number(p.tradeId),
+            price: Number(p.price),
+            quantity: Number(p.quantity ?? p.qty ?? 0),
+            buyOrderId: p.buyOrderId == null ? undefined : Number(p.buyOrderId),
+            sellOrderId:
+              p.sellOrderId == null ? undefined : Number(p.sellOrderId),
+            ts: p.timestamp
+              ? Number(p.timestamp)
+              : p.ts
+              ? Number(p.ts)
+              : undefined,
+          };
+          setMessages((m) => [...m.slice(-499), tr]);
+          return;
+        } else if (t === "positions") {
+          // positions update
+          const rawPositions = Array.isArray(p.positions)
+            ? (p.positions as unknown[])
+            : [];
+          const posMsg: PositionsMsg = {
+            type: "positions",
+            positions: rawPositions.map((item) => {
+              const pp = item as Record<string, unknown>;
+              return {
+                symbol: String(pp.symbol || ""),
+                qty: Number(pp.qty || 0),
+                avgPrice: Number(pp.avgPrice || 0),
+                realizedPnl: Number(pp.realizedPnl || 0),
+              };
+            }),
+          };
+          setMessages((m) => [...m.slice(-499), posMsg]);
+          return;
+        } else if (t === "replayData") {
+          // parsed.trades expected to be array of trade rows; map safely to TradeMsg
+          const tradesArray = Array.isArray(p.trades)
+            ? (p.trades as unknown[])
+            : [];
+          const trades = tradesArray.map((item) => {
+            const rt = item as RawTrade;
+            const trade: TradeMsg = {
+              type: "trade",
+              symbol: String(rt.symbol || ""),
+              tradeId: Number(rt.tradeId),
+              price: Number(rt.price),
+              quantity: Number(rt.quantity ?? rt.qty ?? 0),
+              buyOrderId: rt.buyOrderId,
+              sellOrderId: rt.sellOrderId,
+              ts: rt.timestamp ?? rt.ts,
+            };
+            return trade;
+          });
+          setReplayBuffer(trades);
+          return;
+        }
+
+        // unknown type — ignore
       };
     }
 
@@ -125,7 +209,7 @@ export function useMarketSocket(url = WS_URL) {
         wsRef.current.close();
       wsRef.current = null;
     };
-  }, [url]);
+  }, [url, replayMode]);
 
   // Replay playback effect
   useEffect(() => {
@@ -139,7 +223,7 @@ export function useMarketSocket(url = WS_URL) {
       }
       const tr = replayBuffer[idx++];
       setMessages((m) => [...m.slice(-499), tr]);
-    }, 200 / replaySpeed); // speed control
+    }, 200 / Math.max(1, replaySpeed)); // speed control (avoid division by 0)
 
     return () => clearInterval(interval);
   }, [replayMode, isReplayPlaying, replayBuffer, replaySpeed]);
@@ -176,9 +260,14 @@ export function useMarketSocket(url = WS_URL) {
 
     for (let i = messages.length - 1; i >= 0; --i) {
       const m = messages[i];
-      if (m.symbol !== symbol) continue;
 
-      if (m.type === "top" && !top) top = m;
+      // skip positions messages (they don't have symbol)
+      if (m.type === "positions") continue;
+
+      // now narrowed: m is TopMsg | TradeMsg
+      if ((m as TopMsg).symbol !== symbol) continue;
+
+      if (m.type === "top" && !top) top = m as TopMsg;
       if (m.type === "trade") trades.push(m as TradeMsg);
 
       if (top && trades.length >= 50) break;
@@ -196,8 +285,9 @@ export function useMarketSocket(url = WS_URL) {
     > = {};
 
     for (const t of trades) {
-      const ts = t.ts || 0;
-      const bucket = Math.floor(ts / intervalMs);
+      // convert nanoseconds -> milliseconds (backend is using steady_clock nanos)
+      const tsMs = Math.floor((t.ts || 0) / 1_000_000);
+      const bucket = Math.floor(tsMs / intervalMs);
 
       if (!buckets[bucket]) {
         buckets[bucket] = {

@@ -5,9 +5,10 @@
 #include <boost/beast.hpp>
 #include <boost/beast/websocket.hpp>
 #include <nlohmann/json.hpp>
-#include "Positions.hpp"
-#include "../../engine/include/OrderBook.hpp"
 #include <sqlite3.h>
+
+#include "../../engine/include/OrderBook.hpp"
+#include "../../engine/include/OrderBookManager.hpp"
 
 using json = nlohmann::json;
 namespace beast = boost::beast;
@@ -15,24 +16,15 @@ namespace websocket = beast::websocket;
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
-// ------------------- Risk Limits --------------------
-static const uint32_t MAX_ORDER_SIZE = 10000;
-static const double MAX_DAILY_LOSS = -50000.0;
-static const uint32_t MAX_EXPOSURE = 1000;
-static const double MAX_PRICE_DEVIATION_PCT = 10.0; // max 10% away from market
-
-static std::unordered_map<std::string, int64_t> positionQty;
-static std::unordered_map<std::string, double> avgPrice;
-static double realizedPnL = 0.0;
-
-
 // Forward declarations
 void start_rest_server();
 json fetchTradesForReplay(const std::string& symbol, uint64_t ts_from, uint64_t ts_to);
 
-OrderBook book;
-uint64_t nextOrderId = 1000;
-std::vector<std::shared_ptr<websocket::stream<tcp::socket>>> clients;
+static OrderBookManager mgr;
+static uint64_t nextOrderId = 1000;
+
+// Keep list of connected WS clients (we broadcast all messages to every client; client filters by symbol)
+static std::vector<std::shared_ptr<websocket::stream<tcp::socket>>> clients;
 
 // -------------------- SQLite helpers --------------------
 static bool ensure_db_schema() {
@@ -58,8 +50,8 @@ static bool ensure_db_schema() {
         "CREATE TABLE IF NOT EXISTS Candles ("
         " id INTEGER PRIMARY KEY AUTOINCREMENT,"
         " symbol TEXT,"
-        " tf INTEGER,"           /* timeframe seconds (1,60,300...) */
-        " start_ts INTEGER,"     /* epoch start of candle (in whatever unit you use for trades) */ 
+        " tf INTEGER,"
+        " start_ts INTEGER,"
         " open REAL,"
         " high REAL,"
         " low REAL,"
@@ -74,7 +66,6 @@ static bool ensure_db_schema() {
         sqlite3_close(db);
         return false;
     }
-
     if (sqlite3_exec(db, createCandles, nullptr, nullptr, &err) != SQLITE_OK) {
         std::cerr << "[DB] create Candles failed: " << (err ? err : "") << "\n";
         sqlite3_free(err);
@@ -180,12 +171,18 @@ static void updateCandlesOnTrade(const Trade &t, const std::string &symbol) {
     }
 }
 
+// Broadcast to every WS client (clients should filter by symbol)
 void broadcast(const json& j) {
     std::string msg = j.dump();
-    for (auto& ws : clients) {
+    for (auto it = clients.begin(); it != clients.end();) {
+        auto& ws = *it;
         beast::error_code ec;
         ws->text(true);
         ws->write(net::buffer(msg), ec);
+        if (ec) {
+            // drop broken connection
+            it = clients.erase(it);
+        } else ++it;
     }
 }
 
@@ -203,39 +200,41 @@ json tradeToJSON(const Trade& t, const std::string& symbol) {
 }
 
 void broadcastTop(const std::string& symbol) {
-    double bestBid = book.bids.empty() ? 0.0 : book.bids.begin()->first;
-    double bestAsk = book.asks.empty() ? 0.0 : book.asks.begin()->first;
+    auto* book = mgr.getOrderBook(symbol);
+    if (!book) return;
 
-    // Add depth snapshot (top 10) — use book.getDepth if available
-    json bids_json = json::array();
-    json asks_json = json::array();
+    auto bids = book->getDepth(true, 10);
+    auto asks = book->getDepth(false, 10);
 
-    // Guard: if getDepth not implemented, skip levels
-    try {
-        auto bidLevels = book.getDepth(true, 10);
-        auto askLevels = book.getDepth(false, 10);
-        for (auto &lvl : bidLevels) bids_json.push_back({ {"price", lvl.price}, {"qty", lvl.size} });
-        for (auto &lvl : askLevels) asks_json.push_back({ {"price", lvl.price}, {"qty", lvl.size} });
-    } catch(...) {
-        // ignore
-    }
+    json j;
+    j["type"] = "top";
+    j["symbol"] = symbol;
+    j["timestamp"] = (uint64_t)std::chrono::steady_clock::now().time_since_epoch().count();
 
-    json j = {
-        {"type", "top"},
-        {"symbol", symbol},
-        {"bestBid", book.bids.empty() ? nullptr : json(bestBid)},
-        {"bestAsk", book.asks.empty() ? nullptr : json(bestAsk)},
-        {"timestamp", (uint64_t) std::chrono::steady_clock::now().time_since_epoch().count()},
-        {"bids", bids_json},
-        {"asks", asks_json}
-    };
+    j["bids"] = json::array();
+    j["asks"] = json::array();
+
+    for (auto& b : bids)
+        j["bids"].push_back({{"price", b.price}, {"qty", b.size}});
+
+    for (auto& a : asks)
+        j["asks"].push_back({{"price", a.price}, {"qty", a.size}});
+
+    if (!bids.empty())
+        j["bestBid"] = bids.front().price;
+    else
+        j["bestBid"] = nullptr;
+
+    if (!asks.empty())
+        j["bestAsk"] = asks.front().price;
+    else
+        j["bestAsk"] = nullptr;
 
     broadcast(j);
 }
 
 void handleNewOrder(const json& message) {
     auto o = message["order"];
-
     Order ord;
     ord.orderId = nextOrderId++;
     ord.symbol = o["symbol"];
@@ -244,122 +243,31 @@ void handleNewOrder(const json& message) {
     ord.price = o["price"];
     ord.quantity = o["quantity"];
     ord.timestamp = (uint64_t) std::chrono::steady_clock::now().time_since_epoch().count();
-    
-    // Mark this orderId as a user-submitted order so portfolio tracks it
-    mark_user_order(ord.orderId);
 
-    std::string reason;
-    if (!checkRisk(ord, reason)) {
-        json reject = {
-            {"type", "orderReject"},
-            {"orderId", ord.orderId},
-            {"reason", reason}
-        };
-        broadcast(reject);
-        return; // STOP HERE
-    }
+    // Add to the manager (per-symbol book)
+    auto trades = mgr.addOrder(ord.symbol, ord);
 
-    // If risk passed → process order
-    auto trades = book.addOrder(ord);
-
-    for (auto& t : trades) {
+    // Persist & broadcast each trade
+    for (auto &t : trades) {
         saveTradeToDB(t, ord.symbol);
         updateCandlesOnTrade(t, ord.symbol);
-
-        // Update our portfolio only if this trade involved a user order
-        record_trade_for_order(t.buyOrderId, ord.symbol, true, t.quantity, t.price);
-        record_trade_for_order(t.sellOrderId, ord.symbol, false, t.quantity, t.price);
-
-        // ----- Position & PnL calculation ------
-        int qty = t.quantity;
-        double price = t.price;
-
-        if (ord.side == Side::BUY) {
-            // Increase long
-            int64_t newQty = positionQty[ord.symbol] + qty;
-
-            // Recalculate average price
-            avgPrice[ord.symbol] =
-                ((avgPrice[ord.symbol] * positionQty[ord.symbol]) + price * qty) /
-                newQty;
-
-            positionQty[ord.symbol] = newQty;
-        } else {
-            // Sell reduces position
-            int64_t previousQty = positionQty[ord.symbol];
-            positionQty[ord.symbol] -= qty;
-
-            // Realized pnl only when reducing position
-            if (previousQty > 0) {
-                realizedPnL += (price - avgPrice[ord.symbol]) * qty;
-            }
-        }
-
         broadcast(tradeToJSON(t, ord.symbol));
     }
 
-    // broadcast top-of-book after changes
+    // broadcast top-of-book for that symbol
     broadcastTop(ord.symbol);
-
-    // Broadcast positions snapshot to WS clients
-    auto pos_snap = snapshot_positions();
-    json pos_arr = json::array();
-    for (auto &kv : pos_snap) {
-        pos_arr.push_back({
-            {"symbol", kv.first},
-            {"qty", kv.second.qty},
-            {"avgPrice", kv.second.avgPrice},
-            {"realizedPnl", kv.second.realizedPnl}
-        });
-    }
-    json pj = { {"type", "positions"}, {"positions", pos_arr} };
-    broadcast(pj);
-}
-
-bool checkRisk(const Order &ord, std::string &reason) {
-
-    // 1. Order size limit
-    if (ord.quantity > MAX_ORDER_SIZE) {
-        reason = "Order size exceeds limit";
-        return false;
-    }
-
-    // 2. Check max exposure
-    int64_t futureExposure =
-        positionQty[ord.symbol] + (ord.side == Side::BUY ? ord.quantity : 0);
-
-    if (std::abs(futureExposure) > MAX_EXPOSURE) {
-        reason = "Exposure limit exceeded";
-        return false;
-    }
-
-    // 3. Daily loss check
-    if (realizedPnL < MAX_DAILY_LOSS) {
-        reason = "Trading halted: Loss limit exceeded";
-        return false;
-    }
-
-    // 4. Price deviation
-    if (ord.type == OrderType::LIMIT) {
-        double bestBid = book.bids.empty() ? 0.0 : book.bids.begin()->first;
-        double bestAsk = book.asks.empty() ? 0.0 : book.asks.begin()->first;
-
-        double mid = (bestBid + bestAsk) / 2.0;
-        if (mid > 0) {
-            double dev = std::abs(ord.price - mid) / mid * 100.0;
-            if (dev > MAX_PRICE_DEVIATION_PCT) {
-                reason = "Order price too far from market";
-                return false;
-            }
-        }
-    }
-
-    return true;
 }
 
 void handleCancel(const json& message) {
-    uint64_t id = message["orderId"];
-    book.cancelOrder(id);
+    std::string symbol = message.value("symbol", "");
+    uint64_t id = message.value("orderId", (uint64_t)0);
+
+    if (symbol.empty()) {
+        std::cerr << "[WARN] CANCEL missing symbol\n";
+        return;
+    }
+
+    mgr.cancelOrder(symbol, id);
 }
 
 void session(std::shared_ptr<websocket::stream<tcp::socket>> ws) {
@@ -368,7 +276,6 @@ void session(std::shared_ptr<websocket::stream<tcp::socket>> ws) {
     clients.push_back(ws);
 
     beast::flat_buffer buffer;
-
     while (true) {
         beast::error_code ec;
         ws->read(buffer, ec);
@@ -380,11 +287,12 @@ void session(std::shared_ptr<websocket::stream<tcp::socket>> ws) {
         auto j = json::parse(msg, nullptr, false);
         if (j.is_discarded()) continue;
 
-        if (j["cmd"] == "NEW") {
+        std::string cmd = j.value("cmd", std::string());
+        if (cmd == "NEW") {
             handleNewOrder(j);
-        } else if (j["cmd"] == "CANCEL") {
+        } else if (cmd == "CANCEL") {
             handleCancel(j);
-        } else if (j["cmd"] == "REPLAY") {
+        } else if (cmd == "REPLAY") {
             std::string symbol = j["symbol"];
             uint64_t from = j["from"];
             uint64_t to = j["to"];
@@ -447,18 +355,15 @@ int main() {
     }
 
     try {
-        // START REST SERVER FIRST
-        std::thread restThread([](){
-            start_rest_server();
-        });
+        // start REST server first (background)
+        std::thread restThread(start_rest_server);
         restThread.detach();
-        std::cout << "[REST] Server started on port 9003\n";
 
-        // NOW start websocket server
         net::io_context ioc;
         tcp::acceptor acceptor(ioc, {tcp::v4(), 9001});
 
-        std::cout << "[WS] Listening on ws://localhost:9001\n";
+        std::cout << "WebSocket API listening on ws://localhost:9001\n";
+        std::cout << "[REST] (started in background)\n";
 
         while (true) {
             tcp::socket socket(ioc);

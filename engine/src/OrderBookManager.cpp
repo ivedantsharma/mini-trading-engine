@@ -5,7 +5,6 @@
 #include <chrono>
 #include "DBLogger.hpp"
 
-
 static DBLogger DB;
 
 // helper timestamp (ns)
@@ -79,6 +78,12 @@ void OrderBookManager::cancelOrder(const std::string& symbol, uint64_t orderId) 
         prevTop[symbol] = after;
         emitMarketDataTop(symbol, after);
     }
+}
+
+OrderBook* OrderBookManager::getOrderBook(const std::string& symbol) {
+    auto it = books.find(symbol);
+    if (it == books.end()) return nullptr;
+    return &it->second;
 }
 
 void OrderBookManager::printTopLevels() const {
