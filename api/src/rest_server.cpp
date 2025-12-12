@@ -66,13 +66,31 @@ json getCandles(const std::string &symbol, int tf, int limit) {
 
     json arr = json::array();
     while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int64_t start_ts   = sqlite3_column_int64(stmt, 0);
+        double open        = sqlite3_column_double(stmt, 1);
+        double high        = sqlite3_column_double(stmt, 2);
+        double low         = sqlite3_column_double(stmt, 3);
+        double close       = sqlite3_column_double(stmt, 4);
+        int64_t volume     = sqlite3_column_int64(stmt, 5);
+
+        // If column doesn't exist (old DB), updated_ts = start_ts
+        int64_t updated_ts = 0;
+        int col = sqlite3_column_count(stmt);
+        if (col >= 7) {
+            updated_ts = sqlite3_column_int64(stmt, 6);
+        } else {
+            updated_ts = start_ts;
+        }
+
         arr.push_back({
-            {"start_ts", sqlite3_column_int64(stmt, 0)},
-            {"open", sqlite3_column_double(stmt, 1)},
-            {"high", sqlite3_column_double(stmt, 2)},
-            {"low", sqlite3_column_double(stmt, 3)},
-            {"close", sqlite3_column_double(stmt, 4)},
-            {"volume", sqlite3_column_int64(stmt, 5)}
+            {"start_ts",  start_ts},
+            {"open",      open},
+            {"high",      high},
+            {"low",       low},
+            {"close",     close},
+            {"volume",    volume},
+            {"updated_ts", updated_ts},
+            {"updateLatencyNs", updated_ts - start_ts}
         });
     }
 

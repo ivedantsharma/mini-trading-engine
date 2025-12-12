@@ -121,8 +121,10 @@ static void upsertCandle(const std::string &symbol, int tf_seconds, uint64_t sta
         " high = CASE WHEN ? > high THEN ? ELSE high END, "
         " low  = CASE WHEN ? < low  THEN ? ELSE low  END, "
         " close = ?, "
-        " volume = volume + ? "
+        " volume = volume + ?, "
+        " updated_ts = ? "
         "WHERE symbol = ? AND tf = ? AND start_ts = ?;";
+
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(db, update_sql, -1, &stmt, nullptr) == SQLITE_OK) {
@@ -132,10 +134,10 @@ static void upsertCandle(const std::string &symbol, int tf_seconds, uint64_t sta
         sqlite3_bind_double(stmt, 4, price);
         sqlite3_bind_double(stmt, 5, price); // close
         sqlite3_bind_int(stmt, 6, (int)qty);
-        sqlite3_bind_text(stmt, 7, symbol.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(stmt, 8, tf_seconds);
-        sqlite3_bind_int64(stmt, 9, (sqlite3_int64)start_ts);
-        sqlite3_step(stmt);
+        sqlite3_bind_int64(stmt, 7, (sqlite3_int64)std::chrono::steady_clock::now().time_since_epoch().count()); // updated_ts
+        sqlite3_bind_text(stmt, 8, symbol.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 9, tf_seconds);
+        sqlite3_bind_int64(stmt, 10, (sqlite3_int64)start_ts);
     }
     if (stmt) sqlite3_finalize(stmt);
 
@@ -143,8 +145,8 @@ static void upsertCandle(const std::string &symbol, int tf_seconds, uint64_t sta
 
     if (!updated) {
         const char* insert_sql =
-            "INSERT INTO Candles (symbol, tf, start_ts, open, high, low, close, volume) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?);";
+            "INSERT INTO Candles (symbol, tf, start_ts, open, high, low, close, volume, updated_ts) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);";
         sqlite3_stmt* ins = nullptr;
         if (sqlite3_prepare_v2(db, insert_sql, -1, &ins, nullptr) == SQLITE_OK) {
             sqlite3_bind_text(ins, 1, symbol.c_str(), -1, SQLITE_TRANSIENT);
@@ -155,6 +157,7 @@ static void upsertCandle(const std::string &symbol, int tf_seconds, uint64_t sta
             sqlite3_bind_double(ins, 6, price); // low
             sqlite3_bind_double(ins, 7, price); // close
             sqlite3_bind_int(ins, 8, (int)qty);
+            sqlite3_bind_int64(ins, 9, (sqlite3_int64)std::chrono::steady_clock::now().time_since_epoch().count());
             sqlite3_step(ins);
         }
         if (ins) sqlite3_finalize(ins);
@@ -173,20 +176,29 @@ static void updateCandlesOnTrade(const Trade &t, const std::string &symbol) {
 
 // Broadcast to every WS client (clients should filter by symbol)
 void broadcast(const json& j) {
-    std::string msg = j.dump();
+    json enriched = j;
+    enriched["sendTs"] = (uint64_t) std::chrono::steady_clock::now()
+                             .time_since_epoch()
+                             .count();
+
+    std::string msg = enriched.dump();
+
     for (auto it = clients.begin(); it != clients.end();) {
         auto& ws = *it;
         beast::error_code ec;
+
         ws->text(true);
         ws->write(net::buffer(msg), ec);
+
         if (ec) {
-            // drop broken connection
             it = clients.erase(it);
-        } else ++it;
+        } else {
+            ++it;
+        }
     }
 }
 
-json tradeToJSON(const Trade& t, const std::string& symbol) {
+json tradeToJSON(const Trade& t, const std::string& symbol, uint64_t orderTs) {
     return json{
         {"type", "trade"},
         {"symbol", symbol},
@@ -195,7 +207,9 @@ json tradeToJSON(const Trade& t, const std::string& symbol) {
         {"quantity", t.quantity},
         {"buyOrderId", t.buyOrderId},
         {"sellOrderId", t.sellOrderId},
-        {"timestamp", t.timestamp}
+        {"timestamp", t.timestamp},
+        {"orderTimestamp", orderTs},
+        {"latencyNs", t.timestamp - orderTs}
     };
 }
 
@@ -251,7 +265,7 @@ void handleNewOrder(const json& message) {
     for (auto &t : trades) {
         saveTradeToDB(t, ord.symbol);
         updateCandlesOnTrade(t, ord.symbol);
-        broadcast(tradeToJSON(t, ord.symbol));
+        broadcast(tradeToJSON(t, ord.symbol, ord.timestamp));
     }
 
     // broadcast top-of-book for that symbol

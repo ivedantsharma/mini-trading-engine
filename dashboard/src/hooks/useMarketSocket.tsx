@@ -91,6 +91,19 @@ export function useMarketSocket(url = WS_URL) {
         let parsed: unknown;
         try {
           parsed = JSON.parse(e.data);
+
+          // Check if parsed is a valid object (and not null)
+          if (typeof parsed === "object" && parsed !== null) {
+            // Cast to a generic record to access properties safely
+            const p = parsed as Record<string, unknown>;
+
+            if ("sendTs" in p) {
+              const serverTs = Number(p.sendTs);
+              const clientTs = performance.now() * 1e6; // ms → ns
+              const latency = clientTs - serverTs;
+              console.log("[Market Data Latency ns]", latency);
+            }
+          }
         } catch {
           console.warn("[WS] Received non-JSON message");
           return;
